@@ -1,0 +1,68 @@
+name: Leave-one-out market factor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'research/tools/run_leave_one_out_factor.py'
+      - 'research/external_driver_candidates.json'
+      - 'tests/test_leave_one_out_factor.py'
+      - '.github/workflows/leave-one-out-factor.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '47 5 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  factor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Run public leave-one-out factor analysis
+        id: analysis
+        shell: bash
+        run: |
+          set +e
+          rm -rf research/output/leave_one_out_factor
+          python research/tools/run_leave_one_out_factor.py --output research/output/leave_one_out_factor --request-delay 0.25
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Enforce aggregate artifact allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(printf '%s\n' \
+            research/output/leave_one_out_factor/errors.csv \
+            research/output/leave_one_out_factor/loo_factor_by_stock.csv \
+            research/output/leave_one_out_factor/loo_factor_quartiles.csv \
+            research/output/leave_one_out_factor/market_structure.csv \
+            research/output/leave_one_out_factor/summary.json | sort)
+          actual=$(find research/output/leave_one_out_factor -type f | sort)
+          [[ "$actual" == "$expected" ]] || { echo "::error::Unexpected persisted file"; exit 1; }
+      - name: Add research summary
+        run: |
+          echo '## Leave-one-out market factor' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat research/output/leave_one_out_factor/summary.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload aggregate factor evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: leave-one-out-factor-${{ github.run_id }}
+          path: research/output/leave_one_out_factor/*
+          if-no-files-found: error
+          retention-days: 90
+      - name: Fail if source analysis was incomplete
+        if: steps.analysis.outputs.exit_code != '0'
+        run: |
+          echo "::error::Leave-one-out analysis exited with code ${{ steps.analysis.outputs.exit_code }} after diagnostics were uploaded."
+          exit 1
