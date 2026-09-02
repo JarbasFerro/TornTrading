@@ -190,14 +190,18 @@ def extract_stock_rows(payload: Any) -> list[dict[str, Any]]:
 
 
 def extract_history(payload: Any) -> list[dict[str, Any]]:
+    """Extract chart history from documented and legacy-compatible envelopes."""
     if not isinstance(payload, dict):
         return []
-    chart = payload.get("chart")
-    if isinstance(chart, dict) and isinstance(chart.get("history"), list):
-        return [x for x in chart["history"] if isinstance(x, dict)]
-    stock = payload.get("stock")
-    if isinstance(stock, dict) and isinstance(stock.get("chart"), dict) and isinstance(stock["chart"].get("history"), list):
-        return [x for x in stock["chart"]["history"] if isinstance(x, dict)]
+    candidates: list[dict[str, Any]] = [payload]
+    for key in ("stocks", "stock"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+    for candidate in candidates:
+        chart = candidate.get("chart")
+        if isinstance(chart, dict) and isinstance(chart.get("history"), list):
+            return [x for x in chart["history"] if isinstance(x, dict)]
     return []
 
 

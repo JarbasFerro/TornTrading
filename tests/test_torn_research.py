@@ -16,6 +16,10 @@ class TornResearchTests(unittest.TestCase):
         self.assertNotIn("secret", redacted)
         self.assertIn("foo=bar", redacted)
 
+    def test_extract_history_supports_documented_stocks_envelope(self):
+        payload = {"stocks": {"id": 1, "chart": {"history": [{"timestamp": 60, "price": 10.0, "change": 0.1}]}}}
+        self.assertEqual(tr.extract_history(payload), [{"timestamp": 60, "price": 10.0, "change": 0.1}])
+
     def test_timestamp_inventory_detects_duplicates_and_deltas(self):
         result = tr.timestamp_inventory([
             {"timestamp": 100, "price": 1}, {"timestamp": 160, "price": 1},
