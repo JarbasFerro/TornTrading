@@ -1,0 +1,110 @@
+name: External EOD sector screen
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-eod-sector-screen
+  cancel-in-progress: false
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TIINGO_TOKEN: ${{ secrets.TIINGO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Require Tiingo token
+        shell: bash
+        run: |
+          if [[ -z "${TIINGO_TOKEN:-}" ]]; then
+            echo "::error::Configure the TIINGO_TOKEN Actions secret before running this research screen."
+            exit 1
+          fi
+          echo "TIINGO_TOKEN is configured. Its value is never printed or passed on the command line."
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Run one-batch sector screen
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf research/output/external_sector_screen
+          python research/tools/run_external_sector_screen.py \
+            --output research/output/external_sector_screen
+
+      - name: Enforce aggregate-only artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=research/output/external_sector_screen
+          expected=$(printf '%s\n' \
+            "$root/candidate_statistics.csv" \
+            "$root/errors.csv" \
+            "$root/external_coverage.csv" \
+            "$root/summary.json" | sort)
+          actual=$(find "$root" -type f | sort)
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Unexpected persisted file detected in sector-screen output."
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+          python - <<'PY'
+          import csv, json
+          from pathlib import Path
+
+          root = Path("research/output/external_sector_screen")
+          expected_headers = {
+              "candidate_statistics.csv": [
+                  "torn_symbol", "external_symbol", "candidate_role", "price_variant", "external_date_offset_days",
+                  "overlap_count", "overlap_start", "overlap_end", "pearson", "spearman", "alpha", "beta", "r2",
+                  "primary_control", "control_r2", "candidate_plus_control_r2", "incremental_r2_over_control",
+                  "eligible_years", "median_yearly_pearson", "min_yearly_pearson", "max_yearly_pearson", "years_positive", "years_negative",
+              ],
+              "external_coverage.csv": ["external_symbol", "status", "return_observation_count", "first_return_date", "last_return_date"],
+              "errors.csv": ["external_symbol", "error_class", "message"],
+          }
+          for filename, expected in expected_headers.items():
+              with (root / filename).open(newline="", encoding="utf-8") as handle:
+                  header = next(csv.reader(handle))
+              if header != expected:
+                  raise SystemExit(f"Unexpected aggregate CSV schema for {filename}: {header}")
+          summary = json.loads((root / "summary.json").read_text(encoding="utf-8"))
+          if summary.get("raw_external_data_persisted") is not False:
+              raise SystemExit("summary does not certify raw_external_data_persisted=false")
+          if len(summary.get("external_symbols_requested", [])) != 34:
+              raise SystemExit("sector screen must contain exactly 34 requested external symbols")
+          PY
+
+      - name: Add research summary
+        shell: bash
+        run: |
+          echo '## External EOD sector screen' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Sector-first screen: 30 sector/industry proxies + 4 broad controls.' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat research/output/external_sector_screen/summary.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload aggregate sector results
+        uses: actions/upload-artifact@v4
+        with:
+          name: external-eod-sector-screen-${{ github.run_id }}
+          path: |
+            research/output/external_sector_screen/candidate_statistics.csv
+            research/output/external_sector_screen/errors.csv
+            research/output/external_sector_screen/external_coverage.csv
+            research/output/external_sector_screen/summary.json
+          if-no-files-found: error
+          retention-days: 90
