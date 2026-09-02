@@ -1,0 +1,77 @@
+version: 1
+updated_at_utc: "2026-09-02"
+hypotheses:
+  - id: HYP-001
+    status: PREREGISTERED_PENDING_PROSPECTIVE_DATA
+    research_question: ALP-005
+    statement: >-
+      A Torn stock whose completed 7-day return is at or below the 10th percentile
+      of that stock's trailing 365-day distribution of completed 7-day returns will,
+      on average, outperform non-signaled Torn stocks over the next non-overlapping
+      7-day period.
+    rationale: >-
+      Corrected descriptive anatomy through 2026-09-01 found negative exact-horizon
+      lag-1 7-day autocorrelation in 35/35 stocks, median approximately -0.20; 34/35
+      were negative in all four chronological quartiles; bottom-decile 7-day moves
+      were followed by positive average next-7-day returns in 35/35 stocks. Because
+      those observations generated this hypothesis, all pre-preregistration history
+      is discovery data and is not eligible as confirmatory holdout evidence.
+    information_available_at_signal_time:
+      - completed Torn price observations through the weekly anchor timestamp
+      - stock-specific completed 7-day returns ending before or at the anchor
+      - trailing 365 calendar days of those completed 7-day returns
+    target: "forward Torn return from weekly anchor t to t+7d"
+    universe: "35 current tradable Torn stocks; universe changes require a new hypothesis version"
+    signal_schedule: "Thursdays at 00:00 UTC, beginning 2026-09-03"
+    signal_definition: >-
+      For each stock, compute the just-completed 7-day return and its percentile
+      within that stock's trailing 365-day set of completed daily-ended 7-day returns,
+      using only observations available at the anchor. Signal when percentile <= 10%.
+    sample_start: "2026-09-03"
+    sample_end: "prospective; no pre-2026-09-03 observation may count as confirmatory evidence"
+    train_period: "none for the frozen rule; historical data through 2026-09-01 was discovery only"
+    validation_period: "prospective weekly cohorts; first 13 cohorts are monitoring only and cannot promote the hypothesis"
+    test_period: "prospective; formal confirmatory decision no earlier than 26 completed weekly cohorts and at least 70 stock-signal observations"
+    features:
+      - prior_completed_7d_return
+      - trailing_365d_percentile_of_completed_7d_returns
+    parameter_search_space:
+      threshold_percentile: [10]
+      holding_period_days: [7]
+      anchor_weekday_utc: [Thursday]
+      anchor_time_utc: ["00:00"]
+    transaction_cost_model: >-
+      Primary test is predictive rather than executable-profit validation. Known Torn
+      sell fee is 0.1%; buy fee is zero. No profitability promotion is permitted until
+      P0-E4/P0-E5 establish execution and fee-rounding semantics. A later trading
+      hypothesis must apply those costs without changing HYP-001's frozen signal rule.
+    execution_delay: "not used in primary predictive-effect test; execution interpretation blocked by P0-E4/P0-E5"
+    benchmarks:
+      - "same-week mean next-7d return of non-signaled tradable stocks"
+      - "unconditional prospective next-7d return by stock"
+      - "TCSE / common-factor sensitivity where independently justified"
+      - "validated external-driver residual sensitivity once EXT mapping is available"
+    primary_metric: >-
+      Mean across weekly cohorts of the cross-sectional next-7d return spread:
+      signaled stocks minus non-signaled stocks; inference clustered by weekly cohort.
+    secondary_metrics:
+      - median weekly cross-sectional spread
+      - mean absolute next-7d return of signaled stocks
+      - fraction of weekly cohorts with positive spread
+      - stock-level conditional lift and heterogeneity
+      - sensitivity after independently selected market/external controls
+    acceptance_threshold: >-
+      After at least 26 completed weekly cohorts and 70 signal-stock observations,
+      point estimate of the primary spread must be >= +0.20 percentage points per 7d
+      and the 95% cohort-clustered bootstrap confidence interval lower bound must be > 0.
+      No single stock may account for more than 25% of total signal observations.
+    rejection_condition: >-
+      Reject the frozen predictive hypothesis if, at the formal decision point, the
+      primary spread is <= 0, or if evidence is dominated by one stock/regime, or if
+      the effect reverses after correction of a documented data-quality error. Failure
+      to clear the economic +0.20pp threshold with a positive confidence bound means
+      no promotion, even if some individual stocks look attractive.
+    gating_notes:
+      - "HYP-001 may collect prospective evidence immediately."
+      - "It must not be called executable alpha before external-driver sensitivity and P0-E4/P0-E5 are complete."
+      - "Changing threshold, horizon, schedule, universe handling, or primary metric creates a new hypothesis ID."
