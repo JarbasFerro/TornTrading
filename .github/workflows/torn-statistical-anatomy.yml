@@ -34,11 +34,17 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Run public Torn statistical anatomy
+        id: analysis
+        shell: bash
         run: |
+          set +e
           rm -rf research/output/statistical_anatomy
           python research/tools/run_torn_statistical_anatomy.py \
             --output research/output/statistical_anatomy \
             --request-delay 0.25
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Enforce aggregate artifact allowlist
         shell: bash
@@ -78,3 +84,10 @@ jobs:
           path: research/output/statistical_anatomy/
           if-no-files-found: error
           retention-days: 90
+
+      - name: Fail if source analysis was incomplete
+        if: steps.analysis.outputs.exit_code != '0'
+        shell: bash
+        run: |
+          echo "::error::Statistical anatomy exited with code ${{ steps.analysis.outputs.exit_code }} after diagnostic evidence was uploaded."
+          exit 1
