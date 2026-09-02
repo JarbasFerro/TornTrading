@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "windows": [
+    {
+      "name": "m1_2026-09-01T00_to_12Z",
+      "interval": "m1",
+      "from_ts": 1788220800,
+      "to_ts": 1788264000
+    },
+    {
+      "name": "h1_2026-08-20_to_27Z",
+      "interval": "h1",
+      "from_ts": 1787184000,
+      "to_ts": 1787788800
+    },
+    {
+      "name": "d1_2024H1",
+      "interval": "d1",
+      "from_ts": 1704067200,
+      "to_ts": 1719792000
+    }
+  ]
+}
