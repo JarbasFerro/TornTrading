@@ -2,6 +2,15 @@ name: Official Torn data gate
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "research/tools/run_official_data_gate.py"
+      - "tests/test_official_data_gate.py"
+      - ".github/workflows/official-data-gate.yml"
+  schedule:
+    - cron: "37 3 * * *"
 
 permissions:
   contents: read
