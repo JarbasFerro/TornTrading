@@ -1,0 +1,81 @@
+name: Publication boundary probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "research/tools/run_publication_boundary_probe.py"
+      - "tests/test_publication_boundary_probe.py"
+      - ".github/workflows/publication-boundary-probe.yml"
+  schedule:
+    - cron: "13 2 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publication-boundary-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Require Torn API secret
+        shell: bash
+        run: |
+          if [[ -z "${TORN_API_KEY:-}" ]]; then
+            echo "::error::TORN_API_KEY Actions secret is required."
+            exit 1
+          fi
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Observe three minute boundaries
+        shell: bash
+        run: |
+          set -o pipefail
+          python research/tools/run_publication_boundary_probe.py \
+            --output data/raw \
+            --boundaries 3 \
+            --pre-seconds 6 \
+            --post-seconds 30 \
+            --interval-seconds 2 \
+            --history-delay 0.25 | tee publication-boundary-probe.log
+
+      - name: Add research summary
+        if: always()
+        shell: bash
+        run: |
+          summary=$(find data/raw/publication_boundary -name summary.json -type f 2>/dev/null | sort | tail -n 1 || true)
+          echo '## Publication boundary probe' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$summary" ]]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No boundary summary was generated.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload boundary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publication-boundary-probe-${{ github.run_id }}
+          path: |
+            data/raw/publication_boundary/**
+            publication-boundary-probe.log
+          if-no-files-found: error
+          retention-days: 90
