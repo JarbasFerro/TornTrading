@@ -66,4 +66,4 @@ jobs:
             data/raw/tornsy/matrix/**
             tornsy-audit.log
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
