@@ -1,0 +1,75 @@
+name: Official Torn data gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: official-torn-data-gate
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Initialize audit log
+        run: |
+          echo "Official Torn data gate started at $(date -u +%FT%TZ)" > official-data-gate.log
+
+      - name: Require Torn API secret
+        shell: bash
+        run: |
+          if [[ -z "${TORN_API_KEY:-}" ]]; then
+            echo "TORN_API_KEY repository Actions secret is not configured." | tee -a official-data-gate.log
+            echo "::error::Configure the TORN_API_KEY Actions secret before running the official data gate."
+            exit 1
+          fi
+          echo "TORN_API_KEY is configured; value is never printed or passed on the command line." >> official-data-gate.log
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Run official history and Tornsy reconciliation
+        shell: bash
+        run: |
+          set -o pipefail
+          python research/tools/run_official_data_gate.py \
+            --output data/raw \
+            --limit 2000 \
+            --delay 0.25 | tee -a official-data-gate.log
+
+      - name: Add research summary
+        if: always()
+        shell: bash
+        run: |
+          summary=$(find data/raw/official_data_gate -name summary.json -type f 2>/dev/null | sort | tail -n 1 || true)
+          echo '## Official Torn data gate' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$summary" ]]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No official-data summary was generated. Check the job log; the usual cause is a missing or invalid TORN_API_KEY secret.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload official gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-torn-data-gate-${{ github.run_id }}
+          path: |
+            data/raw/official_data_gate/**
+            official-data-gate.log
+          if-no-files-found: error
+          retention-days: 90
