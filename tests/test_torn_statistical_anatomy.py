@@ -31,14 +31,23 @@ class TornStatisticalAnatomyTests(unittest.TestCase):
         points = anatomy.closed_price_series(rows, "d1", now_ts=172800 + 3600)
         self.assertEqual(points, [(0, 100.0), (86400, 110.0)])
 
-    def test_lagged_returns_support_multi_day_horizons(self):
+    def test_lagged_returns_support_exact_multi_day_horizons(self):
         series = [(i * 86400, 100.0 * (1.01 ** i)) for i in range(40)]
-        seven = anatomy.lagged_returns(series, 7)
-        thirty = anatomy.lagged_returns(series, 30)
+        seven = anatomy.lagged_returns(series, 7, 86400)
+        thirty = anatomy.lagged_returns(series, 30, 86400)
         self.assertEqual(len(seven), 33)
         self.assertEqual(len(thirty), 10)
         self.assertAlmostEqual(seven[0][1], 1.01 ** 7 - 1.0)
         self.assertAlmostEqual(thirty[0][1], 1.01 ** 30 - 1.0)
+
+    def test_lagged_returns_do_not_bridge_source_gaps(self):
+        # Missing timestamp 120 means the 60->180 move spans 120 seconds and
+        # must not be mislabeled as a one-minute return.
+        series = [(0, 100.0), (60, 101.0), (180, 103.0), (240, 104.0)]
+        returns = anatomy.lagged_returns(series, 1, 60)
+        timestamps = [ts for ts, _ in returns]
+        self.assertEqual(timestamps, [60, 240])
+        self.assertNotIn(180, timestamps)
 
     def test_distribution_stats_capture_basic_shape(self):
         values = [-0.02, -0.01, 0.0, 0.01, 0.02]
