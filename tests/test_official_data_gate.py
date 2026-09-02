@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "research" / "tools"))
@@ -14,6 +15,18 @@ class OfficialDataGateTests(unittest.TestCase):
         self.assertEqual(gate.choose_tornsy_interval({"median_delta_s": 3600.0}), "h1")
         self.assertIsNone(gate.choose_tornsy_interval({"median_delta_s": 42}))
         self.assertIsNone(gate.choose_tornsy_interval({"median_delta_s": None}))
+
+    def test_tornsy_overlap_window_accounts_for_exclusive_to(self):
+        inventory = {"oldest_ts": 1000, "newest_ts": 4540, "median_delta_s": 60}
+        self.assertEqual(gate.tornsy_overlap_window(inventory, 2000), (1000, 4600))
+        self.assertEqual(gate.tornsy_overlap_window(inventory, 10), (4000, 4600))
+
+    def test_tornsy_overlap_window_rejects_incomplete_inventory(self):
+        self.assertIsNone(gate.tornsy_overlap_window({"oldest_ts": None, "newest_ts": 10, "median_delta_s": 60}, 10))
+
+    def test_fresh_query_uses_integer_timestamp(self):
+        with mock.patch.object(gate.time, "time", return_value=1234.9):
+            self.assertEqual(gate.fresh_query(), {"timestamp": 1234})
 
     def test_compare_at_offset_detects_one_minute_shift(self):
         official = [
