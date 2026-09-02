@@ -1,0 +1,61 @@
+name: TCSE market factor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "research/tools/run_tcse_factor.py"
+      - "research/external_driver_candidates.json"
+      - ".github/workflows/tcse-factor.yml"
+      - "tests/test_tcse_factor.py"
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  factor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Run public TCSE factor analysis
+        run: |
+          rm -rf research/output/tcse_factor
+          python research/tools/run_tcse_factor.py --output research/output/tcse_factor
+      - name: Enforce aggregate artifact allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(printf '%s\n' \
+            research/output/tcse_factor/errors.csv \
+            research/output/tcse_factor/market_structure.csv \
+            research/output/tcse_factor/summary.json \
+            research/output/tcse_factor/tcse_factor_by_stock.csv \
+            research/output/tcse_factor/tcse_factor_quartiles.csv | sort)
+          actual=$(find research/output/tcse_factor -type f | sort)
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Unexpected persisted file in TCSE output"
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+      - name: Add research summary
+        run: |
+          echo '## TCSE market factor' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat research/output/tcse_factor/summary.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload aggregate TCSE evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: tcse-factor-${{ github.run_id }}
+          path: research/output/tcse_factor/*
+          if-no-files-found: error
+          retention-days: 90
