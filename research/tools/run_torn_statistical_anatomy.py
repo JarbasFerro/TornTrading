@@ -51,7 +51,7 @@ def fetch_rows_with_retry(client: TornsyClient, symbol: str, interval: str, *, l
         try:
             observation = client.get_stock(symbol, interval, limit=limit)
             return parse_tornsy_rows(observation.payload, interval)
-        except Exception as exc:  # network/source failures are recorded by caller
+        except Exception as exc:
             last_error = exc
             if attempt + 1 < attempts:
                 time.sleep(1.0 + attempt)
@@ -71,8 +71,6 @@ def closed_price_series(rows: Sequence[Mapping[str, Any]], interval: str, *, now
             continue
         timestamp = int(ts)
         price = float(value)
-        # Tornsy timestamps label the beginning of a period / Torn minute. Do not
-        # use the currently forming aggregate period in descriptive statistics.
         if timestamp >= current_boundary:
             continue
         if math.isfinite(price) and price > 0:
@@ -80,13 +78,19 @@ def closed_price_series(rows: Sequence[Mapping[str, Any]], interval: str, *, now
     return sorted(points.items())
 
 
-def lagged_returns(series: Sequence[tuple[int, float]], lag: int) -> list[tuple[int, float]]:
+def lagged_returns(series: Sequence[tuple[int, float]], lag: int, expected_step_seconds: int) -> list[tuple[int, float]]:
+    """Return exact-horizon returns only; never bridge source gaps."""
     if lag < 1:
         raise ValueError("lag must be >= 1")
+    if expected_step_seconds <= 0:
+        raise ValueError("expected_step_seconds must be positive")
+    expected_span = expected_step_seconds * lag
     result: list[tuple[int, float]] = []
     for i in range(lag, len(series)):
         ts, price = series[i]
-        _, previous = series[i - lag]
+        previous_ts, previous = series[i - lag]
+        if ts - previous_ts != expected_span:
+            continue
         if previous <= 0:
             continue
         value = price / previous - 1.0
@@ -282,12 +286,7 @@ def run(args: argparse.Namespace) -> int:
             try:
                 rows = fetch_rows_with_retry(client, symbol, interval, limit=2000)
                 fetched[(symbol, interval)] = rows
-                fetch_audit.append({
-                    "torn_symbol": symbol,
-                    "interval": interval,
-                    "status": "ok",
-                    "source_rows": len(rows),
-                })
+                fetch_audit.append({"torn_symbol": symbol, "interval": interval, "status": "ok", "source_rows": len(rows)})
             except ResearchToolError as exc:
                 failures.append({"torn_symbol": symbol, "interval": interval, "message": str(exc)[:300]})
                 fetch_audit.append({"torn_symbol": symbol, "interval": interval, "status": "error", "source_rows": 0})
@@ -303,18 +302,21 @@ def run(args: argparse.Namespace) -> int:
         for horizon, (interval, lag) in HORIZONS.items():
             source_rows = fetched.get((symbol, interval), [])
             prices = closed_price_series(source_rows, interval, now_ts=now_ts)
-            returns = lagged_returns(prices, lag)
+            step = interval_seconds(interval)
+            if step is None:
+                raise ResearchToolError(f"Missing interval size for {interval}")
+            returns = lagged_returns(prices, lag, step)
             values = [value for _, value in returns]
             return_maps[(symbol, horizon)] = {ts: value for ts, value in returns}
-            stats = distribution_stats(values)
             horizon_rows.append(round_row({
                 "torn_symbol": symbol,
                 "horizon": horizon,
                 "source_interval": interval,
                 "lag_periods": lag,
+                "expected_span_seconds": step * lag,
                 "first_return_ts": returns[0][0] if returns else None,
                 "last_return_ts": returns[-1][0] if returns else None,
-                **stats,
+                **distribution_stats(values),
             }))
             for acf_lag in ACF_LAGS:
                 acf_rows.append(round_row({
@@ -325,11 +327,7 @@ def run(args: argparse.Namespace) -> int:
                     "absolute_return_acf": autocorrelation([abs(v) for v in values], acf_lag),
                     "observation_count": len(values),
                 }))
-            continuation_rows.append(round_row({
-                "torn_symbol": symbol,
-                "horizon": horizon,
-                **continuation_reversal_stats(values),
-            }))
+            continuation_rows.append(round_row({"torn_symbol": symbol, "horizon": horizon, **continuation_reversal_stats(values)}))
             for row in quartile_stability(values):
                 stability_rows.append(round_row({"torn_symbol": symbol, "horizon": horizon, **row}))
 
@@ -388,6 +386,7 @@ def run(args: argparse.Namespace) -> int:
         "stability_rows": len(stability_rows),
         "pairwise_correlation_rows": len(correlation_rows),
         "forming_periods_excluded": True,
+        "source_gaps_bridged": False,
         "raw_history_persisted": False,
         "strongest_lag1_return_acf": strongest_return_acf,
         "strongest_lag1_absolute_return_acf": strongest_abs_acf,
