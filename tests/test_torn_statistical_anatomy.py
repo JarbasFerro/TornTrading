@@ -1,8 +1,7 @@
-import json
 import math
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,8 +40,6 @@ class TornStatisticalAnatomyTests(unittest.TestCase):
         self.assertAlmostEqual(thirty[0][1], 1.01 ** 30 - 1.0)
 
     def test_lagged_returns_do_not_bridge_source_gaps(self):
-        # Missing timestamp 120 means the 60->180 move spans 120 seconds and
-        # must not be mislabeled as a one-minute return.
         series = [(0, 100.0), (60, 101.0), (180, 103.0), (240, 104.0)]
         returns = anatomy.lagged_returns(series, 1, 60)
         timestamps = [ts for ts, _ in returns]
@@ -59,15 +56,30 @@ class TornStatisticalAnatomyTests(unittest.TestCase):
         self.assertAlmostEqual(stats["negative_rate"], 0.4)
         self.assertAlmostEqual(stats["zero_rate"], 0.2)
 
-    def test_autocorrelation_detects_persistent_series(self):
-        values = [float(i) for i in range(1, 100)]
-        corr = anatomy.autocorrelation(values, 1)
+    def test_exact_serial_pairs_use_full_horizon_not_adjacent_rolling_windows(self):
+        # Forty daily observations of a hypothetical rolling 30-day return series.
+        # Lag-1 *horizon* must compare 30 days apart, yielding ten pairs, not 39.
+        series = [(i * 86400, float(i)) for i in range(40)]
+        pairs = anatomy.exact_serial_pairs(series, 1, 30 * 86400)
+        self.assertEqual(len(pairs), 10)
+        self.assertEqual(pairs[0], (0.0, 30.0))
+        self.assertEqual(pairs[-1], (9.0, 39.0))
+
+    def test_timestamp_autocorrelation_detects_persistent_exact_horizon_series(self):
+        series = [(i * 60, float(i)) for i in range(1, 100)]
+        pair_count, corr = anatomy.timestamp_autocorrelation(series, 1, 60)
+        self.assertEqual(pair_count, 98)
         self.assertIsNotNone(corr)
         self.assertGreater(corr, 0.99)
 
-    def test_continuation_reversal_stats_detect_continuation(self):
-        values = [0.01, 0.02, 0.01, -0.01, -0.02, -0.01]
-        stats = anatomy.continuation_reversal_stats(values)
+    def test_timestamp_autocorrelation_does_not_bridge_gaps(self):
+        series = [(0, 0.1), (60, 0.2), (180, 0.3), (240, 0.4)]
+        pair_count, _ = anatomy.timestamp_autocorrelation(series, 1, 60)
+        self.assertEqual(pair_count, 2)  # 0->60 and 180->240 only
+
+    def test_continuation_reversal_stats_use_exact_horizon_pairs(self):
+        series = [(i * 60, value) for i, value in enumerate([0.01, 0.02, 0.01, -0.01, -0.02, -0.01])]
+        stats = anatomy.continuation_reversal_stats(series, 60)
         self.assertEqual(stats["transition_count"], 5)
         self.assertGreater(stats["continuation_rate"], 0.5)
         self.assertLess(stats["mean_next_after_negative"], 0)
@@ -80,10 +92,11 @@ class TornStatisticalAnatomyTests(unittest.TestCase):
         self.assertAlmostEqual(corr, 1.0)
 
     def test_quartile_stability_returns_four_segments(self):
-        values = [math.sin(i / 4) / 100 for i in range(100)]
-        rows = anatomy.quartile_stability(values)
+        series = [(i * 60, math.sin(i / 4) / 100) for i in range(100)]
+        rows = anatomy.quartile_stability(series, 60)
         self.assertEqual(len(rows), 4)
         self.assertEqual(sum(row["count"] for row in rows), 100)
+        self.assertTrue(all("serial_pair_count" in row for row in rows))
 
     def test_output_schema_guard_rejects_raw_series(self):
         safe = [{"torn_symbol": "TSB", "horizon": "1h", "mean": 0.001}]

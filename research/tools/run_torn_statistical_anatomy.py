@@ -155,38 +155,81 @@ def distribution_stats(values: Sequence[float]) -> dict[str, float | int | None]
     }
 
 
-def autocorrelation(values: Sequence[float], lag: int) -> float | None:
-    if lag < 1 or len(values) <= lag + 1:
+def pearson_values(xs: Sequence[float], ys: Sequence[float]) -> float | None:
+    if len(xs) != len(ys) or len(xs) < 3:
         return None
-    left = values[:-lag]
-    right = values[lag:]
-    mean_left = statistics.fmean(left)
-    mean_right = statistics.fmean(right)
-    dx = [x - mean_left for x in left]
-    dy = [y - mean_right for y in right]
+    mx = statistics.fmean(xs)
+    my = statistics.fmean(ys)
+    dx = [x - mx for x in xs]
+    dy = [y - my for y in ys]
     denom = math.sqrt(sum(x * x for x in dx) * sum(y * y for y in dy))
     if denom == 0:
         return None
     return sum(x * y for x, y in zip(dx, dy)) / denom
 
 
-def continuation_reversal_stats(values: Sequence[float]) -> dict[str, float | int | None]:
-    if len(values) < 3:
+def exact_serial_pairs(
+    series: Sequence[tuple[int, float]],
+    lag_horizons: int,
+    horizon_span_seconds: int,
+) -> list[tuple[float, float]]:
+    """Pair returns exactly N complete horizons apart.
+
+    This prevents rolling 7d/30d windows from creating mechanical serial correlation
+    through shared underlying days and prevents source gaps from becoming adjacency.
+    """
+    if lag_horizons < 1:
+        raise ValueError("lag_horizons must be >= 1")
+    if horizon_span_seconds <= 0:
+        raise ValueError("horizon_span_seconds must be positive")
+    by_ts = {int(ts): float(value) for ts, value in series}
+    lag_seconds = lag_horizons * horizon_span_seconds
+    pairs: list[tuple[float, float]] = []
+    for ts, current in series:
+        previous = by_ts.get(int(ts) - lag_seconds)
+        if previous is not None:
+            pairs.append((previous, float(current)))
+    return pairs
+
+
+def timestamp_autocorrelation(
+    series: Sequence[tuple[int, float]],
+    lag_horizons: int,
+    horizon_span_seconds: int,
+    *,
+    absolute: bool = False,
+) -> tuple[int, float | None]:
+    pairs = exact_serial_pairs(series, lag_horizons, horizon_span_seconds)
+    if absolute:
+        xs = [abs(a) for a, _ in pairs]
+        ys = [abs(b) for _, b in pairs]
+    else:
+        xs = [a for a, _ in pairs]
+        ys = [b for _, b in pairs]
+    return len(pairs), pearson_values(xs, ys)
+
+
+def continuation_reversal_stats(
+    series: Sequence[tuple[int, float]],
+    horizon_span_seconds: int,
+) -> dict[str, float | int | None]:
+    pairs = exact_serial_pairs(series, 1, horizon_span_seconds)
+    if len(pairs) < 2:
         return {
-            "transition_count": 0,
+            "transition_count": len(pairs),
             "continuation_rate": None,
             "mean_next_after_positive": None,
             "mean_next_after_negative": None,
             "mean_next_after_bottom_decile": None,
             "mean_next_after_top_decile": None,
         }
-    pairs = [(values[i - 1], values[i]) for i in range(1, len(values))]
     signed = [(a, b) for a, b in pairs if a != 0 and b != 0]
     continuation = sum((a > 0) == (b > 0) for a, b in signed) / len(signed) if signed else None
     after_positive = [b for a, b in pairs if a > 0]
     after_negative = [b for a, b in pairs if a < 0]
-    p10 = percentile(values[:-1], 0.10)
-    p90 = percentile(values[:-1], 0.90)
+    previous_values = [a for a, _ in pairs]
+    p10 = percentile(previous_values, 0.10)
+    p90 = percentile(previous_values, 0.90)
     bottom = [b for a, b in pairs if p10 is not None and a <= p10]
     top = [b for a, b in pairs if p90 is not None and a >= p90]
     return {
@@ -199,41 +242,39 @@ def continuation_reversal_stats(values: Sequence[float]) -> dict[str, float | in
     }
 
 
-def quartile_stability(values: Sequence[float]) -> list[dict[str, float | int | None]]:
-    n = len(values)
+def quartile_stability(
+    series: Sequence[tuple[int, float]],
+    horizon_span_seconds: int,
+) -> list[dict[str, float | int | None]]:
+    n = len(series)
     if n < 40:
         return []
     result: list[dict[str, float | int | None]] = []
     for index in range(4):
         start = round(index * n / 4)
         end = round((index + 1) * n / 4)
-        chunk = list(values[start:end])
+        chunk = list(series[start:end])
+        values = [value for _, value in chunk]
+        pair_count, acf1 = timestamp_autocorrelation(chunk, 1, horizon_span_seconds)
+        _, abs_acf1 = timestamp_autocorrelation(chunk, 1, horizon_span_seconds, absolute=True)
         result.append({
             "quartile": index + 1,
             "count": len(chunk),
-            "mean": statistics.fmean(chunk) if chunk else None,
-            "stddev": statistics.stdev(chunk) if len(chunk) >= 2 else None,
-            "acf_lag1": autocorrelation(chunk, 1),
-            "abs_acf_lag1": autocorrelation([abs(v) for v in chunk], 1),
-            "positive_rate": sum(v > 0 for v in chunk) / len(chunk) if chunk else None,
+            "serial_pair_count": pair_count,
+            "mean": statistics.fmean(values) if values else None,
+            "stddev": statistics.stdev(values) if len(values) >= 2 else None,
+            "acf_lag1_horizon": acf1,
+            "abs_acf_lag1_horizon": abs_acf1,
+            "positive_rate": sum(v > 0 for v in values) / len(values) if values else None,
         })
     return result
 
 
 def pearson_aligned(left: Mapping[int, float], right: Mapping[int, float]) -> tuple[int, float | None]:
     common = sorted(set(left).intersection(right))
-    if len(common) < 3:
-        return len(common), None
     xs = [float(left[t]) for t in common]
     ys = [float(right[t]) for t in common]
-    mx = statistics.fmean(xs)
-    my = statistics.fmean(ys)
-    dx = [x - mx for x in xs]
-    dy = [y - my for y in ys]
-    denom = math.sqrt(sum(x * x for x in dx) * sum(y * y for y in dy))
-    if denom == 0:
-        return len(common), None
-    return len(common), sum(x * y for x, y in zip(dx, dy)) / denom
+    return len(common), pearson_values(xs, ys)
 
 
 def round_row(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -305,6 +346,7 @@ def run(args: argparse.Namespace) -> int:
             step = interval_seconds(interval)
             if step is None:
                 raise ResearchToolError(f"Missing interval size for {interval}")
+            horizon_span = step * lag
             returns = lagged_returns(prices, lag, step)
             values = [value for _, value in returns]
             return_maps[(symbol, horizon)] = {ts: value for ts, value in returns}
@@ -313,22 +355,30 @@ def run(args: argparse.Namespace) -> int:
                 "horizon": horizon,
                 "source_interval": interval,
                 "lag_periods": lag,
-                "expected_span_seconds": step * lag,
+                "expected_span_seconds": horizon_span,
                 "first_return_ts": returns[0][0] if returns else None,
                 "last_return_ts": returns[-1][0] if returns else None,
                 **distribution_stats(values),
             }))
             for acf_lag in ACF_LAGS:
+                pair_count, return_acf = timestamp_autocorrelation(returns, acf_lag, horizon_span)
+                _, abs_acf = timestamp_autocorrelation(returns, acf_lag, horizon_span, absolute=True)
                 acf_rows.append(round_row({
                     "torn_symbol": symbol,
                     "horizon": horizon,
-                    "acf_lag_periods": acf_lag,
-                    "return_acf": autocorrelation(values, acf_lag),
-                    "absolute_return_acf": autocorrelation([abs(v) for v in values], acf_lag),
-                    "observation_count": len(values),
+                    "acf_lag_horizons": acf_lag,
+                    "lag_seconds": horizon_span * acf_lag,
+                    "serial_pair_count": pair_count,
+                    "return_acf": return_acf,
+                    "absolute_return_acf": abs_acf,
+                    "return_observation_count": len(values),
                 }))
-            continuation_rows.append(round_row({"torn_symbol": symbol, "horizon": horizon, **continuation_reversal_stats(values)}))
-            for row in quartile_stability(values):
+            continuation_rows.append(round_row({
+                "torn_symbol": symbol,
+                "horizon": horizon,
+                **continuation_reversal_stats(returns, horizon_span),
+            }))
+            for row in quartile_stability(returns, horizon_span):
                 stability_rows.append(round_row({"torn_symbol": symbol, "horizon": horizon, **row}))
 
     correlation_rows: list[dict[str, Any]] = []
@@ -359,12 +409,12 @@ def run(args: argparse.Namespace) -> int:
     write_csv(output / "errors.csv", failures)
 
     strongest_return_acf = sorted(
-        (row for row in acf_rows if row.get("acf_lag_periods") == 1 and isinstance(row.get("return_acf"), float)),
+        (row for row in acf_rows if row.get("acf_lag_horizons") == 1 and isinstance(row.get("return_acf"), float)),
         key=lambda row: abs(float(row["return_acf"])),
         reverse=True,
     )[:15]
     strongest_abs_acf = sorted(
-        (row for row in acf_rows if row.get("acf_lag_periods") == 1 and isinstance(row.get("absolute_return_acf"), float)),
+        (row for row in acf_rows if row.get("acf_lag_horizons") == 1 and isinstance(row.get("absolute_return_acf"), float)),
         key=lambda row: abs(float(row["absolute_return_acf"])),
         reverse=True,
     )[:15]
@@ -387,11 +437,13 @@ def run(args: argparse.Namespace) -> int:
         "pairwise_correlation_rows": len(correlation_rows),
         "forming_periods_excluded": True,
         "source_gaps_bridged": False,
+        "serial_dependence_uses_exact_horizon_separation": True,
+        "overlapping_window_mechanical_acf_rejected": True,
         "raw_history_persisted": False,
         "strongest_lag1_return_acf": strongest_return_acf,
         "strongest_lag1_absolute_return_acf": strongest_abs_acf,
         "strongest_pairwise_correlations": strongest_pairs,
-        "interpretation": "Descriptive anatomy only. Strong autocorrelation/correlation is a hypothesis seed, not validated alpha.",
+        "interpretation": "Descriptive anatomy only. Serial diagnostics compare returns exact horizon multiples apart; strong effects remain hypothesis seeds, not validated alpha.",
     }
     (output / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({k: v for k, v in summary.items() if not isinstance(v, list)}, indent=2, sort_keys=True))
