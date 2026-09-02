@@ -15,8 +15,10 @@ on:
   schedule:
     - cron: "17 4 * * 1"
 
+# TEMPORARY bootstrap permission. This is removed immediately after the exact
+# generated baseline is committed by the workflow on the research branch.
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: tornsy-revision-probe-${{ github.ref }}
@@ -28,6 +30,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -51,6 +55,24 @@ jobs:
             --limit 2000 \
             --delay 0.25 | tee tornsy-revision-probe.log
 
+      - name: Bootstrap exact baseline once
+        if: github.ref == 'refs/heads/stage-0-tornsy-revision-probe'
+        shell: bash
+        run: |
+          if [[ -f research/evidence/tornsy_revision_baseline.json ]]; then
+            echo 'Baseline already committed; bootstrap write not needed.'
+            exit 0
+          fi
+          candidate=$(find data/raw/tornsy/revision_probe -name candidate_baseline.json -type f | head -n 1)
+          test -n "$candidate"
+          mkdir -p research/evidence
+          cp "$candidate" research/evidence/tornsy_revision_baseline.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add research/evidence/tornsy_revision_baseline.json
+          git commit -m 'research: bootstrap Tornsy revision baseline'
+          git push origin HEAD:stage-0-tornsy-revision-probe
+
       - name: Add revision summary
         if: always()
         shell: bash
@@ -65,7 +87,7 @@ jobs:
             cat "$comparison" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           elif [[ -n "$candidate" ]]; then
-            echo 'No committed baseline exists yet. Candidate baseline generated.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'No committed baseline existed at checkout; candidate baseline generated.' >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'Probe did not generate comparison or baseline evidence.' >> "$GITHUB_STEP_SUMMARY"
           fi
