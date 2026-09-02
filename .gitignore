@@ -12,6 +12,7 @@ venv/
 # Research data: may contain API/private/account-derived material
 /data/raw/
 /data/derived/
+/research/output/
 
 # OS/editor
 .DS_Store
