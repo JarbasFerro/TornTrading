@@ -1,57 +1,74 @@
 # TornTrading — Stock Market Mechanics Research
 
-Status: **P0 research pass 1**  
+Status: **P0 research pass 2**  
 Research date: 2026-09-02  
 Questions covered: MEC-001 through MEC-009
 
 ## Executive conclusion
 
-The official documentation is strong enough to lock the broad execution model: stock prices move every minute; buying and selling are normally instantaneous; buys have no tax; sells pay 0.1% of gross sale value; there is no share-count limit; trades are unavailable while hospitalized, jailed or traveling; and quantity-based sales remove shares from the newest transaction first (LIFO).
+The broad Torn stock execution model is documented, and the market-data publication boundary has now also been measured experimentally.
 
-However, several details that matter for a statistically honest backtest are not documented precisely enough: exact minute publication boundary, authoritative price timestamp, fee rounding, whether any sub-cent/rounding behavior exists, and the exact effect of merged purchases on API lot history. These remain explicit controlled experiments and **must not be guessed**.
+Locked mechanics/findings include: prices move every minute; cache-bypassed official bulk stock data presented a coherent full-market transition across three observed boundaries; official chart minute timestamps map directly to the corresponding new API market state; buying/selling is normally instantaneous; buys have no tax; sells pay 0.1% of gross sale value; generic quantity sales consume newest transactions first; and trading is unavailable while hospitalised, jailed or travelling.
+
+The remaining blockers for an **execution-aware profitability backtest** are transaction semantics rather than historical price alignment: UI/order execution timing, fee rounding, and merged-purchase representation still require controlled user transactions/native-page evidence.
 
 Primary source: https://wiki.torn.com/wiki/Stock_Market  
-Patch history: https://wiki.torn.com/wiki/Stock_Market/Patch_History
+Patch history: https://wiki.torn.com/wiki/Stock_Market/Patch_History  
+Experimental result: `11_PUBLICATION_BOUNDARY_RESULTS.md`
 
 ## MEC-001 [P0] — Do all stocks update on the same exact minute boundary?
 
-**Resolution: OPEN — controlled observation required**  
-**Evidence class: HYPOTHESIS**
+**Resolution: CLOSED at 2-second API observation resolution**  
+**Evidence class: VALIDATED_FINDING**
 
-Official Torn documentation says price movements occur every minute. It does not state that every stock is calculated/published atomically at the same second.
+MEC-X1 observed three consecutive minute boundaries using cache-bypassed `GET /torn/stocks` snapshots, Torn server timestamps, and later official per-stock chart history as the target state.
 
-Tornsy's collector represents stock observations on minute-aligned Unix timestamps, but that only establishes the archive's convention, not Torn's internal calculation boundary.
+At the three boundaries, 25, 27 and 24 stocks respectively changed price. For each boundary:
 
-### Required experiment
+- the final sampled server-second before the boundary showed every changed stock at its previous-minute price;
+- the first sampled server-second after the boundary showed every changed stock at its new chart-history price;
+- no sampled official response contained a mixed state with some changed stocks old and others new.
 
-Poll `GET /torn/stocks` with service-cache bypass around multiple minute boundaries while also sampling `GET /torn/timestamp`. Record local monotonic clock, Torn server time, response start/end time and every stock price. Test whether first observed changes cluster on one server-second and whether constituents can update on different responses.
+First full new-state responses were received at +1.426s, +1.354s and +1.345s relative to the minute boundary. The last pre-boundary responses were around -0.55 to -0.62s.
 
-Do not exceed a conservative polling rate and run only a short boundary experiment, not continuous high-rate polling.
+### Research rule
+
+At the measured 2-second resolution, cache-bypassed bulk `/torn/stocks` may be treated as a coherent market snapshot. Do not claim a sub-second atomic switch; the actual transition occurs somewhere between the last old and first new observations.
+
+The weekly boundary probe remains active and any future mixed response reopens this question.
 
 ## MEC-002 [P0] — Authoritative timestamp of a price
 
-**Resolution: OPEN — API history provides timestamps but semantics are undocumented**  
-**Evidence class: HYPOTHESIS**
+**Resolution: CLOSED at API/source-label level; UI/order-execution semantics remain open**  
+**Evidence class: VALIDATED_FINDING with scope limitation**
 
-The v2 stock-history schema supplies `price`, `change`, and Unix `timestamp`, but the OpenAPI description does not state whether that timestamp means calculation time, effective/publication time, or chart sample time.
+The official v2 stock-history schema provides `price`, `change`, and Unix `timestamp`. MEC-X1 established that the chart row timestamped exactly at `HH:MM:00` corresponds to the complete new minute state seen through the uncached official bulk API on the first observed post-boundary sample.
 
-### Required experiment
+Independent official/Tornsy reconciliation also found historical rows joining at zero timestamp offset with exact numeric price equality.
 
-Compare:
+### Canonical data rule
 
-1. first live observation of a new price;
-2. Torn server timestamp;
-3. timestamp later emitted in the stock's chart history;
-4. Tornsy timestamp for the same move.
+For historical/source alignment:
 
-The canonical research dataset must not treat those fields as equivalent until this is resolved.
+```text
+source_timestamp = official chart minute timestamp
+source_timestamp_semantics = minute_state_label_verified
+```
+
+Tornsy `m1` rows carrying the same timestamp may be joined directly to that Torn minute **as a data label**.
+
+Do not interpret the field as `order_executable_at`. MEC-X1 did not observe the native Torn page or an actual trade submission. UI render/execution timing remains part of P0-E4/P0-E5.
+
+### Tornsy live availability caveat
+
+In the first three-boundary experiment, Tornsy exposed the matching minute later than the first uncached official state: +23.746s, +23.762s and +11.765s after the boundary. Historical Tornsy rows therefore must not be treated as if they were available to a live consumer at `HH:MM:00` merely because their source timestamp has that value.
 
 ## MEC-003 [P0] — Buy execution price
 
 **Resolution: PARTIAL — documented behavior, exact edge semantics require test**  
 **Evidence class: MECHANIC**
 
-Official stock documentation states buying/selling is instantaneous, except that if a transaction is attempted while prices are updating Torn may take roughly several seconds and ask the user to confirm again with the new share price.
+Official stock documentation states buying/selling is instantaneous, except that if a transaction is attempted while prices are updating Torn may take several seconds and ask the user to confirm again with the new share price.
 
 This establishes that Torn does not guarantee a stale displayed quote through a price update: a changed price can force reconfirmation.
 
@@ -133,18 +150,13 @@ Every strategy must be evaluated under multiple human-delay assumptions rather t
 
 Official documentation says purchases can be merged into one position and that displayed bought price, bought date, profit and change are averaged.
 
-API v2 `/user/stocks` returns, for each currently represented stock, a `transactions` array whose records contain:
-
-- transaction ID;
-- shares;
-- price;
-- timestamp.
+API v2 `/user/stocks` returns, for each currently represented stock, a `transactions` array whose records contain transaction ID, shares, price and timestamp.
 
 The schema alone does not prove whether merging preserves all original acquisition transactions, creates/replaces an aggregate transaction, or changes IDs.
 
 ### Required experiment
 
-Capture `/user/stocks` before and after merging two controlled purchases and diff the transaction array exactly. Until this is tested, TornTrading must not promise tax-lot/lot-level historical reconstruction after merges.
+Capture `/user/stocks` before and after merging two controlled purchases and diff the transaction array exactly. Until this is tested, TornTrading must not promise lot-level historical reconstruction after merges.
 
 ## MEC-009 [P0] — Partial-sale lot attribution / cost basis
 
@@ -163,11 +175,14 @@ The stock page also permits selling an individual purchase directly, which is a 
 - Explicit sale of a selected purchase: consume that selected lot.
 - Merged-position behavior must follow the result of MEC-008 rather than an assumption.
 
-## Locked mechanics for later research
+## Locked mechanics/findings for later research
 
-The following may now be treated as `MECHANIC` unless Torn changes them:
+The following may now be treated as `MECHANIC` or scoped `VALIDATED_FINDING` unless new evidence contradicts them:
 
 - price movements occur every minute;
+- at 2-second observation resolution, cache-bypassed bulk official publication transitioned coherently across the full market in three tested boundaries;
+- official chart minute timestamps label the corresponding new official API minute state;
+- Tornsy historical minute timestamps use the same price-state label, but Tornsy live publication may lag the official state materially;
 - trades are generally instantaneous;
 - updating prices can trigger reconfirmation at a new price;
 - no share quantity/ownership limit;
@@ -177,20 +192,22 @@ The following may now be treated as `MECHANIC` unless Torn changes them:
 - generic partial sales consume newest acquisition transaction first;
 - stock prices are stated by Torn to be based on real-world stocks in corresponding industries.
 
-## Blocking experiment pack
+## Remaining execution experiment pack
 
-Before the backtesting engine is approved, run **MEC-X1 Execution Boundary Experiment**:
+Before an execution-aware backtesting engine is approved, complete P0-E4/P0-E5:
 
-1. Observe 20+ price-change boundaries with synchronized Torn server timestamps.
-2. Determine whether all stocks change atomically.
-3. Map chart-history timestamp to first observable live price.
-4. Execute at least one controlled buy away from boundary and one near boundary.
-5. Execute controlled small sales sufficient to identify fee rounding.
-6. Capture `/user/stocks` before/after a partial LIFO sale.
-7. Capture `/user/stocks` before/after merging purchases.
+1. Compare the actively loaded native stock graph/quote with cache-bypassed API data.
+2. Execute at least one controlled buy away from a minute boundary and record quote/submission/API transaction evidence.
+3. Observe a boundary/reconfirmation trade if it can be done safely and economically.
+4. Execute controlled small sales sufficient to identify fee rounding.
+5. Capture `/user/stocks` before/after a quantity partial sale and verify API representation.
+6. Capture `/user/stocks` before/after merging purchases.
+7. Capture a full exit to determine how the holding disappears from `/user/stocks`.
 
-Raw responses/screenshots and exact timestamps must be retained as research evidence.
+Raw API responses, screenshots/native-page observations and exact timestamps must be retained as research evidence.
 
 ## Decision
 
-**PARTIALLY APPROVED.** Enough mechanics are known to design the collector and data model. The execution/backtesting engine is **not yet approved** until MEC-001, MEC-002, MEC-006 and MEC-008 are experimentally resolved, and MEC-003/004 are cross-checked with at least one controlled transaction.
+**APPROVED for historical market research and minute-level source timestamp alignment.** MEC-001 is validated at 2-second API observation resolution and MEC-002 is validated at the API/source-label level.
+
+**NOT YET APPROVED for execution-aware profitability backtesting.** MEC-003, MEC-004, MEC-006 and MEC-008 still require controlled transaction/native-page evidence, and the validated API timestamp must not be presented as an exact order-execution timestamp.
