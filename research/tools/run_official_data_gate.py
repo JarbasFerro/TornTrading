@@ -123,7 +123,8 @@ def choose_best_offset(rows: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] |
     def score(row: Mapping[str, Any]) -> tuple[float, int, float, int]:
         equal_pct = float(row.get("numeric_equal_pct") or 0.0)
         pairs = int(row.get("comparable_pairs") or 0)
-        mean_diff = float(row.get("mean_abs_price_diff") or float("inf"))
+        raw_mean_diff = row.get("mean_abs_price_diff")
+        mean_diff = float(raw_mean_diff) if isinstance(raw_mean_diff, (int, float)) else float("inf")
         offset = abs(int(row.get("offset_seconds") or 0))
         return (equal_pct, pairs, -mean_diff, -offset)
 
@@ -159,7 +160,7 @@ def run(args: argparse.Namespace) -> int:
     all_stocks = torn.get("/torn/stocks")
     stocks = extract_stock_rows(all_stocks.payload)
     write_json_immutable(run_dir / "raw" / "official_timestamp.json", observation_record(server_time))
-    write_json_immutable(run_dir / "raw" / "official_stocks.json", observation_record(all_stocks))
+    write_json_immutable(run_dir / "raw" / "official_stocks_initial.json", observation_record(all_stocks))
 
     comparison_rows: list[dict[str, Any]] = []
     for index, stock in enumerate(stocks):
@@ -228,9 +229,11 @@ def run(args: argparse.Namespace) -> int:
         if args.delay > 0 and index + 1 < len(stocks):
             time.sleep(args.delay)
 
+    live_official = torn.get("/torn/stocks")
     live_archive = tornsy.get_watchlist()
+    write_json_immutable(run_dir / "raw" / "official_stocks_live.json", observation_record(live_official))
     write_json_immutable(run_dir / "raw" / "tornsy_watchlist.json", observation_record(live_archive))
-    live_comparison = reconcile_live_payloads(all_stocks.payload, live_archive.payload)
+    live_comparison = reconcile_live_payloads(live_official.payload, live_archive.payload)
 
     inventory_fields = [
         "stock_id", "symbol", "history_rows", "unique_timestamps", "oldest_ts", "newest_ts",
