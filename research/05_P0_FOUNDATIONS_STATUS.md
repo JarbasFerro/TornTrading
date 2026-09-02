@@ -2,18 +2,20 @@
 
 Status date: 2026-09-02
 
-This document is the operational gate for the first Stage 0 research sprint. Detailed evidence lives in `01_GOVERNANCE_COMPLIANCE.md` through `04_HISTORICAL_DATA_AUDIT.md`.
+This document is the operational gate for Stage 0. Detailed evidence lives in `01_GOVERNANCE_COMPLIANCE.md` through `09_OFFICIAL_DATA_GATE_RESULTS.md`.
 
 ## Gate summary
 
 | Domain | Gate | Result |
 |---|---|---|
-| Governance/compliance | Can we legally/safely build API-driven read-only analysis? | **PASS** |
-| Market mechanics | Do we know enough to collect/model data? | **PASS FOR COLLECTION; HOLD FOR BACKTESTING** |
+| Governance/compliance | Can we safely build API-driven read-only analysis? | **PASS** |
+| Market mechanics | Do we know enough to collect/model data? | **PASS FOR COLLECTION; HOLD FOR EXECUTION BACKTESTS** |
 | API/data surface | Can official API support market + portfolio research? | **PASS** |
-| Historical data | Is history validated enough for alpha research? | **FAIL / BLOCKED PENDING AUDIT** |
-| External-driver research | May Stage 2 begin? | **NO** |
-| Signal/alpha research | May Stage 4 begin? | **NO** |
+| Historical price data | Is price history validated enough for descriptive research? | **PASS WITH QUALIFICATIONS** |
+| External-driver candidate mapping | May non-causal mapping/statistics begin? | **YES** |
+| Minute lead/lag alpha | May causal timing claims begin? | **NO — EFFECTIVE TIMESTAMP BLOCKER** |
+| Execution-aware backtesting | May profitability claims begin? | **NO — MEC-X1/P0-E4 BLOCKERS** |
+| Production signals | May a BUY/SELL engine ship? | **NO** |
 
 ## Question status
 
@@ -31,8 +33,8 @@ This document is the operational gate for the first Stage 0 research sprint. Det
 
 ### MEC P0
 
-- MEC-001: OPEN — exact cross-stock minute boundary
-- MEC-002: OPEN — authoritative/effective timestamp semantics
+- MEC-001: OPEN — exact cross-stock publication boundary/atomicity
+- MEC-002: OPEN — economic/effective timestamp semantics
 - MEC-003: PARTIAL — buy execution model documented; controlled cross-check pending
 - MEC-004: PARTIAL — sell execution model documented; controlled cross-check pending
 - MEC-005: PARTIAL — documented friction known; rounding empirical
@@ -41,88 +43,97 @@ This document is the operational gate for the first Stage 0 research sprint. Det
 - MEC-008: OPEN — merged purchase effect on API transactions
 - MEC-009: CLOSED — newest transaction consumed first on generic sale
 
-**Mechanics gate: PASS for data collector; HOLD for transaction simulator/backtests.**
+**Mechanics gate: PASS for data research; HOLD for execution-aware backtests.**
 
 ### API P0
 
 - API-001: CLOSED schema
-- API-002: PARTIAL — history schema known, runtime depth/resolution unknown
-- API-003: OPEN — history resolution by age
-- API-004: OPEN — API chart versus native chart equality
+- API-002: CLOSED for current runtime behavior — specific-stock history observed at 60 rows / m1
+- API-003: CLOSED for current endpoint observation — current history is a 60-point rolling minute window; repeat monitoring remains prudent
+- API-004: OPEN — API chart versus native loaded graph equality
 - API-005: CLOSED schema; merge semantics linked to MEC-008
-- API-006: PARTIAL — no sale-history schema; full-sale disappearance needs confirmation
+- API-006: PARTIAL — no separate sale-history schema; full-sale disappearance needs confirmation
 - API-007: CLOSED aggregate realized stock stats
 - API-008: PARTIAL — cumulative payouts available; event logs require optional Full key
-- API-009: CLOSED documented cache behavior
+- API-009: CLOSED — all requests have service cache up to 30s; unique `timestamp` query bypasses it
 - API-010: CLOSED server timestamp availability
 - API-011: CLOSED documented request limit; endpoint-specific record limits remain monitored
 
-**API gate: PASS for collector/data model.**
+**API gate: PASS.**
 
 ### DAT P0
 
-- DAT-001: OPEN — official history depth
-- DAT-002: PARTIAL — Tornsy interface/depth lead known; full audit pending
-- DAT-003: OPEN — official vs Tornsy reconciliation
-- DAT-004: OPEN — missing-minute rate
-- DAT-005: OPEN — missingness mechanism
+- DAT-001: CLOSED — official history observed as 60 one-minute rows for all 35 official stocks
+- DAT-002: PASS WITH QUALIFICATIONS — Tornsy archive audited at m1/h1/d1; gaps and forming-candle caveats documented
+- DAT-003: PASS WITH QUALIFICATIONS — first credentialed run produced 2,065/2,065 exact historical price matches at zero timestamp offset across all 35 official stocks
+- DAT-004: ADVANCED — bounded Tornsy audit quantified observed gaps; deeper monthly/full-archive missingness remains research work
+- DAT-005: ADVANCED — observed major gaps were source-wide, supporting provider/system outage interpretation; broader classification continues
 - DAT-006: CLOSED as canonical data policy
-- DAT-007: PARTIAL — timestamp formats known, semantics unresolved
-- DAT-008: OPEN — retroactive revision behavior
-- DAT-009: DESIGN APPROVED — canonical schema/source precedence provisional
-- DAT-010: PARTIAL — known structural events seeded; statistical breaks later
+- DAT-007: PARTIAL — official/Tornsy timestamp labels align at zero offset; executable/publication semantics remain MEC-002
+- DAT-008: PASS FOR SHORT-INTERVAL GUARD — 108 fixed windows reran with zero revisions; weekly guard continues
+- DAT-009: DESIGN APPROVED — source precedence updated after official reconciliation
+- DAT-010: PARTIAL — known structural events seeded; statistical break detection later
 
-**Historical-data gate: BLOCKED.**
+**Historical-price gate: PASS WITH QUALIFICATIONS for descriptive statistics and external-driver candidate mapping.**
+
+## Credentialed official-data evidence
+
+GitHub Actions run `33663657891` established:
+
+- 35 current official Torn stocks;
+- 60 official history observations per stock;
+- one-minute cadence for every stock;
+- 59 historical Torn/Tornsy comparable minutes per stock in run 1;
+- 100% exact price equality on all 2,065 compared observations;
+- zero best timestamp offset for all 35 stocks.
+
+Run 1 compared 59 rather than 60 points because Tornsy's `to` filter is exclusive. The gate is corrected to request one interval beyond the newest official timestamp.
+
+Tornsy also exposes `TCSE`, which is treated as a **market index**, not a tradable stock. The canonical tradable universe is the official `/torn/stocks` set.
+
+The apparent run-1 live disagreement is classified as service-cache contamination: Torn documents service caching of all requests for up to 30 seconds, while individual official history points obtained after the crossed minute boundary matched Tornsy's new-minute prices exactly. All future official-gate requests explicitly bypass service cache with a unique `timestamp` query parameter.
+
+See `09_OFFICIAL_DATA_GATE_RESULTS.md`.
 
 ## Immediate experiment queue
 
-Priority order is intentionally dependency-driven.
-
 ### P0-E1 — Official history inventory
 
-Requires: Public Torn API key.
+**Status: PASS.**
 
-For every stock:
+Continue daily monitoring for schema/depth changes, but the current behavior is established well enough for architecture and source precedence.
 
-- fetch `GET /torn/{stockId}/stocks`;
-- record history count, oldest/newest timestamp and adjacent timestamp deltas;
-- repeat after 24 hours;
-- determine rolling window/resolution behavior.
+### P0-E2 — Official/Tornsy reconciliation
 
-Closes/advances: API-002, API-003, DAT-001, DAT-007.
+**Status: PASS WITH QUALIFICATIONS.**
 
-### P0-E2 — Live official/Tornsy reconciliation
-
-Requires: Public Torn API key + Tornsy.
-
-At one-minute cadence:
-
-- persist official `/torn/stocks` snapshot;
-- retrieve matching Tornsy data after its documented publication delay;
-- compare prices/timestamps across all stocks;
-- run for at least 7 days before final source-certification decision.
-
-Closes/advances: MEC-001, MEC-002, API-009, DAT-003, DAT-007.
+Daily cache-bypassed reconciliation now accumulates repeated evidence. Historical source equality is strong; causal publication timing is intentionally delegated to MEC-X1.
 
 ### P0-E3 — Tornsy archive audit
 
-Does not require Torn key.
+**Status: PASS WITH QUALIFICATIONS.**
 
-For every stock:
+Public m1/h1/d1 audit and the fixed-window revision guard are operational. Continue revision monitoring and deepen missingness statistics as the full research dataset is assembled.
 
-- inventory `m1`, `h1`, `d1` coverage;
-- discover earliest timestamps;
-- calculate gaps, duplicates and longest outages;
-- hash retrieved historical windows;
-- refetch overlaps to detect revisions.
+### MEC-X1 — Publication Boundary Experiment
 
-Closes/advances: DAT-002, DAT-004, DAT-005, DAT-008.
+**Status: NEXT CRITICAL EXPERIMENT.**
+
+Use cache-bypassed official API requests around multiple minute boundaries to determine:
+
+- first Torn server second at which new prices become visible;
+- whether stock publication is atomic across the market;
+- relationship between first visibility and chart-history timestamp;
+- Tornsy publication delay for the same minute;
+- whether any apparent source lead survives official service-cache bypass.
+
+This experiment is required before minute-level external-market lead/lag claims.
 
 ### P0-E4 — Controlled transaction semantics
 
-Requires: user's Torn account and deliberately small transactions.
+Requires deliberately small user transactions.
 
-Capture before/after API state around:
+Capture before/after state around:
 
 - normal buy;
 - boundary/reconfirmation buy or sell if naturally encountered;
@@ -135,39 +146,33 @@ Closes/advances: MEC-003, MEC-004, MEC-005, MEC-006, MEC-008, API-005, API-006.
 
 ### P0-E5 — Native graph/API equivalence
 
-Requires: actively viewed Torn stock page + Public API key.
-
-Compare data already present in the loaded native graph with the API history. Do not issue automatic non-API Torn requests.
+Compare data already present in an actively loaded Torn stock graph with official API history. Do not issue automatic non-API Torn requests.
 
 Closes/advances: API-004.
 
-## Implementation authorization
+## Research authorization after credentialed run 1
 
-The Stage 0 contract now authorizes only the following code classes:
+Now authorized:
 
-1. Research data collector.
-2. Historical downloader/auditor.
-3. Source reconciliation and data-integrity tooling.
-4. Fixtures/tests for the above.
-5. Optional manual experiment logger for transaction evidence.
+1. Research data collection and source reconciliation.
+2. Historical downloader/auditor and revision monitoring.
+3. Descriptive market statistics using audited Tornsy history.
+4. External-market **candidate mapping** at horizons that do not depend on unresolved sub-minute publication semantics.
+5. Non-causal correlation, clustering, volatility/regime and structural-break exploration.
+6. Publication-boundary research.
 
-Not authorized yet:
+Still not authorized:
 
+- claims that an external market leads Torn by N minutes;
+- minute-level causal predictive backtests;
 - BUY/SELL signal engine;
-- technical-indicator strategy;
-- external-market predictive model;
-- backtest claims;
-- portfolio optimizer;
+- execution-aware profitability claims;
+- portfolio optimizer based on unvalidated alpha;
 - autonomous execution;
 - production Torn stock-page UI claiming predictive value.
 
 ## Next gate
 
-P0 Foundations becomes fully **PASS** only when:
+The next major transition is from **validated historical prices** to **validated market-effective timestamps**.
 
-- official chart-history depth/resolution/timestamp behavior is measured;
-- Tornsy overlap accuracy and missingness are quantified;
-- retroactive-revision behavior is tested;
-- execution fee/lot semantics required by a transaction simulator are measured.
-
-External-driver reverse engineering may begin once the **historical-data subset** passes, even if nonessential UI/portfolio transaction edge cases remain open, provided no backtest requires those unresolved execution assumptions.
+MEC-X1 must pass before minute-level lead/lag research can be interpreted causally. P0-E4 must pass before strategy returns can be represented as realistic executable profit. These two blockers can proceed independently while descriptive external-driver mapping starts in parallel.

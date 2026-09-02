@@ -48,8 +48,12 @@ INTERVAL_BY_SECONDS = {
 }
 
 
+def fresh_query() -> dict[str, int]:
+    """Make an official Torn request unique to bypass service cache."""
+    return {"timestamp": int(time.time())}
+
+
 def official_price(row: Mapping[str, Any]) -> float | None:
-    """Return the chart point's price-like value without assuming one schema only."""
     for key in ("price", "close", "value"):
         value = row.get(key)
         if isinstance(value, (int, float)) and math.isfinite(float(value)):
@@ -61,8 +65,23 @@ def choose_tornsy_interval(inventory: Mapping[str, Any]) -> str | None:
     value = inventory.get("median_delta_s")
     if not isinstance(value, (int, float)):
         return None
-    rounded = int(round(float(value)))
-    return INTERVAL_BY_SECONDS.get(rounded)
+    return INTERVAL_BY_SECONDS.get(int(round(float(value))))
+
+
+def tornsy_overlap_window(inventory: Mapping[str, Any], limit: int) -> tuple[int, int] | None:
+    """Return Tornsy [from, to) bounds covering the official history window.
+
+    Tornsy documents `from` as inclusive and `to` as exclusive, so the end bound
+    is one observed interval beyond the newest official timestamp.
+    """
+    oldest = inventory.get("oldest_ts")
+    newest = inventory.get("newest_ts")
+    delta = inventory.get("median_delta_s")
+    if not all(isinstance(v, (int, float)) for v in (oldest, newest, delta)):
+        return None
+    step = int(round(float(delta)))
+    start = max(int(oldest), int(newest) - step * (limit - 1))
+    return start, int(newest) + step
 
 
 def tornsy_price(row: Mapping[str, Any], interval: str) -> float | None:
@@ -123,8 +142,8 @@ def choose_best_offset(rows: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] |
     def score(row: Mapping[str, Any]) -> tuple[float, int, float, int]:
         equal_pct = float(row.get("numeric_equal_pct") or 0.0)
         pairs = int(row.get("comparable_pairs") or 0)
-        raw_mean_diff = row.get("mean_abs_price_diff")
-        mean_diff = float(raw_mean_diff) if isinstance(raw_mean_diff, (int, float)) else float("inf")
+        raw_diff = row.get("mean_abs_price_diff")
+        mean_diff = float(raw_diff) if raw_diff is not None else float("inf")
         offset = abs(int(row.get("offset_seconds") or 0))
         return (equal_pct, pairs, -mean_diff, -offset)
 
@@ -156,8 +175,8 @@ def run(args: argparse.Namespace) -> int:
     run_id = safe_filename_timestamp()
     run_dir = Path(args.output) / "official_data_gate" / run_id
 
-    server_time = torn.get("/torn/timestamp")
-    all_stocks = torn.get("/torn/stocks")
+    server_time = torn.get("/torn/timestamp", query=fresh_query())
+    all_stocks = torn.get("/torn/stocks", query=fresh_query())
     stocks = extract_stock_rows(all_stocks.payload)
     write_json_immutable(run_dir / "raw" / "official_timestamp.json", observation_record(server_time))
     write_json_immutable(run_dir / "raw" / "official_stocks_initial.json", observation_record(all_stocks))
@@ -166,7 +185,7 @@ def run(args: argparse.Namespace) -> int:
     for index, stock in enumerate(stocks):
         stock_id = int(stock["id"])
         symbol = str(stock.get("acronym") or stock_id).upper()
-        official = torn.get(f"/torn/{stock_id}/stocks")
+        official = torn.get(f"/torn/{stock_id}/stocks", query=fresh_query())
         history = extract_history(official.payload)
         inventory = timestamp_inventory(history)
         write_json_immutable(
@@ -189,16 +208,15 @@ def run(args: argparse.Namespace) -> int:
             "status": "unresolved",
         }
 
-        if interval and history and inventory.get("newest_ts") is not None:
+        bounds = tornsy_overlap_window(inventory, args.limit)
+        if interval and history and bounds is not None:
             delta = int(round(float(inventory["median_delta_s"])))
-            newest = int(inventory["newest_ts"])
-            oldest = int(inventory["oldest_ts"])
-            from_ts = max(oldest, newest - delta * (args.limit - 1))
+            from_ts, to_ts = bounds
             archive = tornsy.get_stock(
                 symbol,
                 interval,
                 from_ts=from_ts,
-                to_ts=newest,
+                to_ts=to_ts,
                 limit=args.limit,
             )
             archive_rows = parse_tornsy_rows(archive.payload, interval)
@@ -229,11 +247,12 @@ def run(args: argparse.Namespace) -> int:
         if args.delay > 0 and index + 1 < len(stocks):
             time.sleep(args.delay)
 
-    live_official = torn.get("/torn/stocks")
+    # Capture live sources back-to-back with an explicit service-cache bypass.
+    official_live = torn.get("/torn/stocks", query=fresh_query())
     live_archive = tornsy.get_watchlist()
-    write_json_immutable(run_dir / "raw" / "official_stocks_live.json", observation_record(live_official))
+    write_json_immutable(run_dir / "raw" / "official_stocks_live.json", observation_record(official_live))
     write_json_immutable(run_dir / "raw" / "tornsy_watchlist.json", observation_record(live_archive))
-    live_comparison = reconcile_live_payloads(live_official.payload, live_archive.payload)
+    live_comparison = reconcile_live_payloads(official_live.payload, live_archive.payload)
 
     inventory_fields = [
         "stock_id", "symbol", "history_rows", "unique_timestamps", "oldest_ts", "newest_ts",
@@ -246,6 +265,13 @@ def run(args: argparse.Namespace) -> int:
     write_json_immutable(run_dir / "history_comparison.json", comparison_rows)
     write_json_immutable(run_dir / "live_comparison.json", live_comparison)
 
+    official_symbols = {str(row.get("acronym", "")).upper() for row in extract_stock_rows(official_live.payload)}
+    tornsy_symbols = {
+        str(row.get("stock", "")).upper()
+        for row in (live_archive.payload.get("data", []) if isinstance(live_archive.payload, dict) else [])
+        if isinstance(row, dict) and row.get("stock")
+    }
+
     summary = {
         "created_at_utc": iso_utc(),
         "run_id": run_id,
@@ -257,7 +283,10 @@ def run(args: argparse.Namespace) -> int:
             "exact_price_matches": sum(
                 1 for row in live_comparison.get("rows", []) if row.get("price_equal_numeric") is True
             ),
+            "tornsy_only_symbols": sorted(tornsy_symbols - official_symbols),
+            "official_only_symbols": sorted(official_symbols - tornsy_symbols),
         },
+        "cache_policy": "Official requests include a unique timestamp query parameter to bypass Torn service cache.",
         "interpretation": (
             "Evidence inventory only. Best timestamp offset is descriptive and must not be treated as a "
             "validated timing rule until repeated observations establish stability and execution semantics."
