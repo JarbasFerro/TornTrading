@@ -1,0 +1,80 @@
+name: Torn statistical anatomy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/torn-statistical-anatomy.yml'
+      - 'research/tools/run_torn_statistical_anatomy.py'
+      - 'research/external_driver_candidates.json'
+      - 'tests/test_torn_statistical_anatomy.py'
+  workflow_dispatch:
+  schedule:
+    - cron: '37 3 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: torn-statistical-anatomy
+  cancel-in-progress: false
+
+jobs:
+  anatomy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Run public Torn statistical anatomy
+        run: |
+          rm -rf research/output/statistical_anatomy
+          python research/tools/run_torn_statistical_anatomy.py \
+            --output research/output/statistical_anatomy \
+            --request-delay 0.25
+
+      - name: Enforce aggregate artifact allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(printf '%s\n' \
+            research/output/statistical_anatomy/autocorrelation.csv \
+            research/output/statistical_anatomy/continuation_reversal.csv \
+            research/output/statistical_anatomy/errors.csv \
+            research/output/statistical_anatomy/fetch_audit.csv \
+            research/output/statistical_anatomy/horizon_statistics.csv \
+            research/output/statistical_anatomy/pairwise_correlations.csv \
+            research/output/statistical_anatomy/stability_quartiles.csv \
+            research/output/statistical_anatomy/summary.json | sort)
+          actual=$(find research/output/statistical_anatomy -type f | sort)
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Unexpected persisted file detected."
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+
+      - name: Add research summary
+        shell: bash
+        run: |
+          echo '## Torn statistical anatomy' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Descriptive statistics only; no alpha validation or trading signal.' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat research/output/statistical_anatomy/summary.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload aggregate statistical evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: torn-statistical-anatomy-${{ github.run_id }}
+          path: research/output/statistical_anatomy/
+          if-no-files-found: error
+          retention-days: 90
