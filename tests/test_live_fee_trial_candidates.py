@@ -17,8 +17,12 @@ def stock(stock_id, acronym, name, price):
 
 
 class LiveFeeTrialCandidateTests(unittest.TestCase):
-    def test_official_price_normalizes_to_two_decimals(self):
+    def test_official_price_normalizes_cent_value_to_two_decimals(self):
         self.assertEqual(str(live.official_price(stock(1, "AAA", "A", 50.1))), "50.10")
+
+    def test_official_price_rejects_sub_cent_precision(self):
+        with self.assertRaises(ValueError):
+            live.official_price(stock(1, "AAA", "A", 50.123))
 
     def test_tcse_is_excluded(self):
         rows = [stock(1, "TCSE", "Index", 50.01), stock(2, "AAA", "A", 50.01)]
