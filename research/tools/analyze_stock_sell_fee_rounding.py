@@ -26,6 +26,7 @@ DEFAULT_LOOKBACK_DAYS = 365
 MAX_LOG_ROWS = 100
 FEE_RATE = Decimal("0.001")
 MIN_DISCRIMINATING_OBSERVATIONS = 6
+MIN_WINNER_PAIRWISE_SEPARATION = 6
 
 ROUNDING = {
     "floor": ROUND_FLOOR,
@@ -54,6 +55,7 @@ REPORT_KEYS = {
     "rejected_observations",
     "candidate_model_count",
     "discriminating_observations",
+    "winner_minimum_pairwise_separation",
     "model_results",
     "prediction_equivalence_classes",
     "perfect_models",
@@ -69,6 +71,7 @@ DECISION_STATES = {
     "MULTIPLE_NON_EQUIVALENT_PERFECT_MODELS",
     "NO_PERFECT_MODEL",
     "INSUFFICIENT_DISCRIMINATION",
+    "INSUFFICIENT_WINNER_SEPARATION",
     "NO_USABLE_OBSERVATIONS",
 }
 ISO_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$")
@@ -215,6 +218,21 @@ def discriminating_observation_count(vectors: Mapping[str, Sequence[int]]) -> in
     return sum(len({vector[index] for vector in values}) > 1 for index in range(width))
 
 
+def minimum_pairwise_separation(vectors: Mapping[str, Sequence[int]], winner: str) -> int | None:
+    """Minimum number of observations separating winner from any competitor."""
+    if winner not in vectors:
+        raise ValueError("winner is not present in prediction vectors")
+    winner_vector = vectors[winner]
+    competitors = [name for name in vectors if name != winner]
+    if not competitors:
+        return None
+    separations = [
+        sum(a != b for a, b in zip(winner_vector, vectors[name]))
+        for name in competitors
+    ]
+    return min(separations)
+
+
 def equivalence_classes(vectors: Mapping[str, tuple[int, ...]]) -> list[dict[str, Any]]:
     groups: dict[tuple[int, ...], list[str]] = {}
     for model, vector in vectors.items():
@@ -254,10 +272,14 @@ def analyze(observations: Sequence[SaleObservation], rejected: int, *, lookback_
         for model_name in row["models"]:
             class_by_model[model_name] = index
 
+    winner_separation = minimum_pairwise_separation(vectors, perfect[0]) if len(perfect) == 1 else None
+
     if not observations:
         decision = "NO_USABLE_OBSERVATIONS"
     elif discrim < MIN_DISCRIMINATING_OBSERVATIONS:
         decision = "INSUFFICIENT_DISCRIMINATION"
+    elif len(perfect) == 1 and (winner_separation or 0) < MIN_WINNER_PAIRWISE_SEPARATION:
+        decision = "INSUFFICIENT_WINNER_SEPARATION"
     elif len(perfect) == 1:
         decision = "UNIQUE_PERFECT_MODEL"
     elif len(perfect) > 1 and len({class_by_model[name] for name in perfect}) == 1:
@@ -278,14 +300,16 @@ def analyze(observations: Sequence[SaleObservation], rejected: int, *, lookback_
         "rejected_observations": rejected,
         "candidate_model_count": len(models),
         "discriminating_observations": discrim,
+        "winner_minimum_pairwise_separation": winner_separation,
         "model_results": result_rows,
         "prediction_equivalence_classes": classes,
         "perfect_models": sorted(perfect),
         "decision_status": decision,
         "acceptance_rule": (
             f"P0-E5 may be proposed for closure only when there are at least {MIN_DISCRIMINATING_OBSERVATIONS} "
-            "discriminating observations and exactly one perfect non-redundant candidate model. Sample-dependent "
-            "ties remain unresolved."
+            f"globally discriminating observations, exactly one perfect non-redundant candidate model, and that winner "
+            f"differs from every competitor on at least {MIN_WINNER_PAIRWISE_SEPARATION} observations. Sample-dependent "
+            "ties or weak nearest-competitor separation remain unresolved."
         ),
         "privacy_note": (
             "No raw logs, transaction IDs, event timestamps, stock IDs, share counts, prices, fees, profits, losses, "
@@ -317,6 +341,9 @@ def assert_safe_report(report: Mapping[str, Any]) -> None:
     ):
         if not isinstance(report.get(key), int) or report[key] < 0:
             raise ResearchToolError(f"{key} must be a non-negative integer.")
+    winner_separation = report.get("winner_minimum_pairwise_separation")
+    if winner_separation is not None and (not isinstance(winner_separation, int) or winner_separation < 0):
+        raise ResearchToolError("winner_minimum_pairwise_separation must be null or a non-negative integer.")
     if report.get("sell_log_type_id") != SELL_LOG_TYPE_ID:
         raise ResearchToolError("Unexpected sell_log_type_id.")
     if report.get("api_row_cap") != MAX_LOG_ROWS:
@@ -370,6 +397,10 @@ def assert_safe_report(report: Mapping[str, Any]) -> None:
     perfect = report.get("perfect_models")
     if not isinstance(perfect, list) or not all(name in model_names for name in perfect):
         raise ResearchToolError("Invalid perfect_models.")
+    if len(perfect) == 1 and winner_separation is None:
+        raise ResearchToolError("Unique perfect model requires a winner separation diagnostic.")
+    if len(perfect) != 1 and winner_separation is not None:
+        raise ResearchToolError("Winner separation must be null unless exactly one perfect model exists.")
 
 
 def write_report(path: Path, report: Mapping[str, Any]) -> None:
