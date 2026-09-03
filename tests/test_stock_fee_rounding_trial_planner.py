@@ -21,8 +21,10 @@ class StockFeeRoundingTrialPlannerTests(unittest.TestCase):
         assert candidate is not None
         self.assertEqual(candidate.boundary_multiplier, 1)
         self.assertEqual(candidate.displayed_gross, "1000.20")
-        self.assertEqual(candidate.conservative_gross_low, "1000.10")
+        self.assertEqual(candidate.conservative_gross_low, "1000.100")
         self.assertEqual(candidate.conservative_gross_high, "1000.40")
+        self.assertEqual(candidate.lower_margin, "0.100")
+        self.assertEqual(candidate.upper_margin, "0.10")
         self.assertEqual(candidate.reference_unrounded_total_ceiling_fee, 2)
         self.assertEqual(candidate.competing_rounded_gross_or_non_ceiling_fee, 1)
 
@@ -31,8 +33,10 @@ class StockFeeRoundingTrialPlannerTests(unittest.TestCase):
         self.assertIsNotNone(candidate)
         assert candidate is not None
         self.assertEqual(candidate.displayed_gross, "1000.10")
-        self.assertEqual(candidate.conservative_gross_low, "1000.05")
+        self.assertEqual(candidate.conservative_gross_low, "1000.050")
         self.assertEqual(candidate.conservative_gross_high, "1000.20")
+        self.assertEqual(candidate.lower_margin, "0.050")
+        self.assertEqual(candidate.upper_margin, "0.30")
 
     def test_candidate_rejects_boundary_and_half_dollar_ambiguity(self):
         # At exactly $1,000 displayed gross the conservative lower interval crosses
@@ -53,6 +57,10 @@ class StockFeeRoundingTrialPlannerTests(unittest.TestCase):
             high = (price + Decimal("0.01")) * Decimal(candidate.shares)
             self.assertGreater(low, boundary)
             self.assertLess(high, boundary + Decimal("0.50"))
+            self.assertEqual(Decimal(candidate.conservative_gross_low), low)
+            self.assertEqual(Decimal(candidate.conservative_gross_high), high)
+            self.assertGreater(Decimal(candidate.lower_margin), 0)
+            self.assertGreater(Decimal(candidate.upper_margin), 0)
             self.assertEqual(candidate.reference_unrounded_total_ceiling_fee, candidate.boundary_multiplier + 1)
             self.assertEqual(candidate.competing_rounded_gross_or_non_ceiling_fee, candidate.boundary_multiplier)
 
@@ -65,6 +73,15 @@ class StockFeeRoundingTrialPlannerTests(unittest.TestCase):
         )
         self.assertEqual(len(candidates), 1)
         self.assertLessEqual(Decimal(candidates[0].displayed_gross), Decimal("2500"))
+
+    def test_invalid_search_limits_are_rejected(self):
+        for max_gross in (Decimal("0"), Decimal("-1"), Decimal("NaN"), Decimal("Infinity")):
+            with self.assertRaises(planner.PlannerError):
+                planner.find_candidates(Decimal("50.01"), max_gross=max_gross)
+        with self.assertRaises(planner.PlannerError):
+            planner.find_candidates(Decimal("50.01"), max_shares=0)
+        with self.assertRaises(planner.PlannerError):
+            planner.find_candidates(Decimal("50.01"), limit=0)
 
     def test_no_candidate_is_explicit(self):
         candidates = planner.find_candidates(
