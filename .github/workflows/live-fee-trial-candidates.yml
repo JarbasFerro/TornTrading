@@ -1,0 +1,79 @@
+name: Live fee-trial candidates
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/live-fee-trial-candidates.yml'
+      - 'research/tools/snapshot_live_fee_trial_candidates.py'
+      - 'tests/test_live_fee_trial_candidates.py'
+      - 'research/tools/plan_stock_fee_rounding_trial.py'
+      - 'research/25_FEE_ROUNDING_TARGETED_CONFIRMATION.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Snapshot current official prices and robust trial candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf research/output/live_fee_trial_candidates
+          python research/tools/snapshot_live_fee_trial_candidates.py \
+            --api-key "$TORN_API_KEY" \
+            --output research/output/live_fee_trial_candidates/summary.json
+
+      - name: Revalidate candidate artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='research/output/live_fee_trial_candidates/summary.json'
+          actual=$(find research/output/live_fee_trial_candidates -type f | sort)
+          if [[ "$actual" != "$expected" ]]; then
+            echo '::error::Unexpected live candidate artifact file.'
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+          PYTHONPATH=research/tools python - <<'PY'
+          import json
+          from pathlib import Path
+          import snapshot_live_fee_trial_candidates as live
+
+          path = Path('research/output/live_fee_trial_candidates/summary.json')
+          report = json.loads(path.read_text(encoding='utf-8'))
+          live.assert_safe_report(report)
+          PY
+
+      - name: Add experiment-plan summary
+        shell: bash
+        run: |
+          echo '## Live P0-E5 fee-trial candidates' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Public current-price experiment plans only. No Torn transaction is submitted. Every plan expires if the live Torn price differs from planned_price before the human click.' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat research/output/live_fee_trial_candidates/summary.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload live experiment plans
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-fee-trial-candidates-${{ github.run_id }}
+          path: research/output/live_fee_trial_candidates/summary.json
+          if-no-files-found: error
+          retention-days: 7
