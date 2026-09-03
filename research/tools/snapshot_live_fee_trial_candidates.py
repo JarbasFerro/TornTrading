@@ -54,6 +54,9 @@ def official_price(stock: Mapping[str, Any]) -> Decimal:
         raise ValueError("invalid market.price") from exc
     if not raw.is_finite() or raw <= 0:
         raise ValueError("invalid market.price")
+    cents = raw * Decimal("100")
+    if cents != cents.to_integral_value():
+        raise ValueError("official market.price exposes sub-cent precision")
     return raw.quantize(Decimal("0.01"))
 
 
@@ -238,10 +241,14 @@ def assert_safe_report(report: Mapping[str, Any]) -> None:
         raise ResearchToolError("Unexpected source.")
     if not isinstance(report.get("server_timestamp"), int) or report["server_timestamp"] <= 0:
         raise ResearchToolError("Invalid server timestamp.")
+    for key in ("tradable_stock_rows_considered", "candidate_stock_boundary_pairs"):
+        if not isinstance(report.get(key), int) or report[key] < 0:
+            raise ResearchToolError(f"{key} must be a non-negative integer.")
+    if report.get("max_displayed_gross") != format(MAX_GROSS, ".2f"):
+        raise ResearchToolError("Unexpected maximum displayed gross.")
     groups = report.get("candidates_by_boundary")
     if not isinstance(groups, Mapping):
         raise ResearchToolError("Candidate groups must be a mapping.")
-    total = 0
     for key, rows in groups.items():
         try:
             k = int(key)
@@ -253,7 +260,6 @@ def assert_safe_report(report: Mapping[str, Any]) -> None:
             if not isinstance(row, Mapping) or int(row.get("boundary_multiplier", -1)) != k:
                 raise ResearchToolError("Candidate is in the wrong boundary group.")
             assert_candidate(row)
-        total += len(rows)
     suggested = report.get("suggested_six")
     if not isinstance(suggested, list) or len(suggested) not in (0, 6):
         raise ResearchToolError("suggested_six must contain zero or six candidates.")
