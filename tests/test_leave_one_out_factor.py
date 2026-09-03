@@ -27,6 +27,12 @@ class LeaveOneOutFactorTests(unittest.TestCase):
         factor = loo.leave_one_out_factor("TARGET", series, min_peers=30)
         self.assertEqual(factor[1], 1.0)
 
+    def test_pair_factor_excludes_both_pair_members(self):
+        series = {"LEFT": {1: 100.0}, "RIGHT": {1: -100.0}}
+        series.update({f"P{i}": {1: 1.0} for i in range(33)})
+        factor = loo.peer_factor({"LEFT", "RIGHT"}, series, min_peers=30)
+        self.assertEqual(factor[1], 1.0)
+
     def test_factor_requires_peer_coverage(self):
         series = {"TARGET": {1: 0.0}}
         series.update({f"P{i}": {1: 1.0} for i in range(29)})
@@ -45,6 +51,18 @@ class LeaveOneOutFactorTests(unittest.TestCase):
         residuals, stats = loo.residualize(target, factor)
         self.assertTrue(all(abs(x) < 1e-12 for x in residuals.values()))
         self.assertAlmostEqual(stats["residual_variance_ratio"], 0.0, places=10)
+
+    def test_leave_two_out_residual_summary_removes_shared_factor(self):
+        series = {}
+        for peer in range(33):
+            series[f"P{peer}"] = {t: (t - 25) / 1000 for t in range(60)}
+        common = {t: (t - 25) / 1000 for t in range(60)}
+        series["LEFT"] = {t: common[t] + ((t % 5) - 2) / 10000 for t in common}
+        series["RIGHT"] = {t: 1.5 * common[t] + (((t * 2) % 7) - 3) / 10000 for t in common}
+        raw = loo.pairwise_summary({"LEFT": series["LEFT"], "RIGHT": series["RIGHT"]})
+        adjusted = loo.leave_two_out_residual_pairwise_summary(series)
+        self.assertGreater(raw["mean_pairwise_pearson"], 0.9)
+        self.assertIsNotNone(adjusted["mean_pairwise_pearson"])
 
     def test_output_guard(self):
         self.assertTrue(loo.aggregate_guard([{"r2": .1, "horizon": "1h"}]))
