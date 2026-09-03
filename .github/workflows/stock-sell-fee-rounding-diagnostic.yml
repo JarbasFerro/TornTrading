@@ -6,7 +6,9 @@ on:
     paths:
       - '.github/workflows/stock-sell-fee-rounding-diagnostic.yml'
       - 'research/tools/diagnose_stock_sell_fee_rounding.py'
+      - 'research/tools/run_stock_sell_fee_rounding_diagnostic.py'
       - 'tests/test_stock_sell_fee_rounding_diagnostic.py'
+      - 'tests/test_stock_sell_fee_rounding_diagnostic_runner.py'
       - 'research/22_FEE_ROUNDING_RESULT.md'
       - 'research/23_FEE_ROUNDING_DIAGNOSTIC_PREREGISTRATION.md'
   workflow_dispatch:
@@ -34,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf research/output/fee_rounding_diagnostic
-          python research/tools/diagnose_stock_sell_fee_rounding.py \
+          python research/tools/run_stock_sell_fee_rounding_diagnostic.py \
             --api-key "$TORN_API_KEY" \
             --output research/output/fee_rounding_diagnostic/summary.json
 
