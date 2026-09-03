@@ -1,0 +1,49 @@
+name: P0-E5b HRG trial audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/p0-e5b-hrg-trial-audit.yml'
+      - 'research/tools/audit_p0_e5b_hrg_trial.py'
+      - 'tests/test_p0_e5b_hrg_trial.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run focused tests
+        run: python -m unittest tests.test_p0_e5b_hrg_trial -v
+      - name: Audit official receipt
+        run: |
+          test -n "$TORN_API_KEY"
+          python research/tools/audit_p0_e5b_hrg_trial.py \
+            --api-key "$TORN_API_KEY" \
+            --output research/output/p0_e5b_hrg_trial/summary.json
+      - name: Revalidate aggregate-only artifact
+        run: |
+          PYTHONPATH=research/tools python - <<'PY'
+          import json
+          from pathlib import Path
+          import audit_p0_e5b_hrg_trial as audit
+          p = Path('research/output/p0_e5b_hrg_trial/summary.json')
+          report = json.loads(p.read_text())
+          audit.assert_safe_report(report)
+          PY
+      - name: Upload aggregate trial audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-e5b-hrg-trial-audit-${{ github.run_id }}
+          path: research/output/p0_e5b_hrg_trial/summary.json
+          retention-days: 90
