@@ -1,0 +1,54 @@
+name: Live P0-E5b fee candidates
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'research/tools/snapshot_live_fee_ceiling_family_candidates.py'
+      - 'research/tools/plan_stock_fee_ceiling_family.py'
+      - 'tests/test_live_fee_ceiling_family_candidates.py'
+      - '.github/workflows/live-fee-ceiling-family-candidates.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run unit tests
+        run: python -m unittest tests.test_live_fee_ceiling_family_candidates -v
+      - name: Snapshot live P0-E5b candidates
+        env:
+          TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+        run: |
+          test -n "$TORN_API_KEY"
+          python research/tools/snapshot_live_fee_ceiling_family_candidates.py \
+            --api-key "$TORN_API_KEY" \
+            --output research/output/live_fee_ceiling_family_candidates/summary.json
+      - name: Revalidate artifact
+        run: |
+          python - <<'PY'
+          import json, sys
+          from pathlib import Path
+          sys.path.insert(0, 'research/tools')
+          import snapshot_live_fee_ceiling_family_candidates as live
+          p = Path('research/output/live_fee_ceiling_family_candidates/summary.json')
+          report = json.loads(p.read_text())
+          allowed = {'research_status','source','server_timestamp','retrieved_at_utc','max_gross','candidate_count','candidates','validity_note','compliance_note'}
+          assert set(report) == allowed
+          assert report['candidate_count'] == len(report['candidates'])
+          for row in report['candidates']:
+              live.validate_candidate(row)
+          PY
+      - name: Upload candidate snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-p0-e5b-candidates-${{ github.run_id }}
+          path: research/output/live_fee_ceiling_family_candidates/summary.json
+          retention-days: 7
