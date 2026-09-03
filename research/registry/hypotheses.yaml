@@ -1,5 +1,5 @@
 version: 1
-updated_at_utc: "2026-09-02"
+updated_at_utc: "2026-09-03"
 hypotheses:
   - id: HYP-001
     status: PREREGISTERED_PENDING_PROSPECTIVE_DATA
@@ -16,30 +16,77 @@ hypotheses:
       were followed by positive average next-7-day returns in 35/35 stocks. Because
       those observations generated this hypothesis, all pre-preregistration history
       is discovery data and is not eligible as confirmatory holdout evidence.
+    preregistration_clarification: >-
+      Before the first prospective cohort existed, the source-price convention,
+      percentile algorithm, missing-data eligibility rule, capture deadline and
+      immutable evidence storage were made explicit. No prospective outcome was
+      observed before these implementation conventions were frozen; threshold,
+      horizon, weekly anchor, target and primary metric are unchanged.
+    activation_record: >-
+      The originally nominated 2026-09-03 00:00 UTC anchor occurred before the
+      prospective collector passed review and was merged. That cohort is therefore
+      classified as missed/pre-activation and must never be backfilled or counted as
+      confirmatory evidence. The first eligible confirmatory anchor is 2026-09-10
+      00:00 UTC. This activation amendment was recorded before any HYP-001
+      confirmatory cohort or forward outcome existed and does not alter the frozen
+      signal rule.
     information_available_at_signal_time:
       - completed Torn price observations through the weekly anchor timestamp
       - stock-specific completed 7-day returns ending before or at the anchor
       - trailing 365 calendar days of those completed 7-day returns
     target: "forward Torn return from weekly anchor t to t+7d"
     universe: "35 current tradable Torn stocks; universe changes require a new hypothesis version"
-    signal_schedule: "Thursdays at 00:00 UTC, beginning 2026-09-03"
+    signal_schedule: "Thursdays at 00:00 UTC; first eligible confirmatory anchor 2026-09-10"
+    price_convention: >-
+      Anchor price is the fixed opening value of Tornsy's d1 candle timestamped at
+      Thursday 00:00 UTC. The candle may still be forming when retrieved, but its
+      open is fixed at the anchor boundary. Prior and future 7-day endpoints use the
+      corresponding UTC-boundary daily opens, producing exact open-to-open 7d returns.
+    source_availability_rule: >-
+      The cohort record stores actual retrieval timestamps and source payload hashes.
+      The predictive test is indexed to the Torn boundary price, but any later
+      executable interpretation must respect the real source-availability delay and
+      P0-E4/P0-E5 execution evidence rather than assuming zero-latency access.
+    capture_window_rule: >-
+      A confirmatory cohort may be generated only from 00:00:00 through 03:00:00 UTC
+      on its scheduled Thursday. If the source or workflow is unavailable beyond that
+      deadline, the cohort is classified as missed and is never reconstructed later.
+      The collector validates the window both before collection and before writing.
     signal_definition: >-
-      For each stock, compute the just-completed 7-day return and its percentile
-      within that stock's trailing 365-day set of completed daily-ended 7-day returns,
-      using only observations available at the anchor. Signal when percentile <= 10%.
-    sample_start: "2026-09-03"
-    sample_end: "prospective; no pre-2026-09-03 observation may count as confirmatory evidence"
+      For each eligible stock, compute the just-completed exact open-to-open 7-day
+      return and compare it with the linearly interpolated 10th percentile of that
+      stock's trailing 365-calendar-day set of completed daily-ended open-to-open
+      7-day returns, using only observations available at the anchor. Condition is
+      met when prior 7-day return <= that frozen 10th-percentile threshold.
+    percentile_method: "linear interpolation between ordered observations at position (n-1)*0.10"
+    eligibility_rule: >-
+      A stock needs the exact anchor open, exact t-7d open and at least 300 valid
+      trailing 7-day returns within the 365-day lookback. Insufficient trailing history
+      excludes that stock from both signal and non-signal groups for the cohort and is
+      recorded explicitly. Missing exact anchor/t-7d endpoints is a cohort data-quality
+      failure: no confirmatory cohort file may be created from an incomplete endpoint set.
+    evidence_immutability_rule: >-
+      Each Thursday creates a new cohort file before its forward outcome exists. One
+      week later a separate outcome file is created. Existing cohort/outcome files are
+      never overwritten; confirmatory evidence is not retrospectively backfilled.
+      Each cohort records hashes of the hypothesis registry, frozen universe manifest
+      and collector source code used to produce it.
+    sample_start: "2026-09-10"
+    sample_end: "prospective; no observation before the first eligible 2026-09-10 anchor may count as confirmatory evidence"
     train_period: "none for the frozen rule; historical data through 2026-09-01 was discovery only"
-    validation_period: "prospective weekly cohorts; first 13 cohorts are monitoring only and cannot promote the hypothesis"
-    test_period: "prospective; formal confirmatory decision no earlier than 26 completed weekly cohorts and at least 70 stock-signal observations"
+    validation_period: "prospective weekly cohorts; first 13 completed eligible cohorts are monitoring only and cannot promote the hypothesis"
+    test_period: "prospective; formal confirmatory decision no earlier than 26 completed eligible weekly cohorts and at least 70 stock-signal observations"
     features:
-      - prior_completed_7d_return
-      - trailing_365d_percentile_of_completed_7d_returns
+      - prior_completed_open_to_open_7d_return
+      - trailing_365d_percentile_of_completed_open_to_open_7d_returns
     parameter_search_space:
       threshold_percentile: [10]
       holding_period_days: [7]
       anchor_weekday_utc: [Thursday]
       anchor_time_utc: ["00:00"]
+      capture_deadline_utc: ["03:00"]
+      lookback_calendar_days: [365]
+      minimum_trailing_returns: [300]
     transaction_cost_model: >-
       Primary test is predictive rather than executable-profit validation. Known Torn
       sell fee is 0.1%; buy fee is zero. No profitability promotion is permitted until
@@ -47,16 +94,17 @@ hypotheses:
       hypothesis must apply those costs without changing HYP-001's frozen signal rule.
     execution_delay: "not used in primary predictive-effect test; execution interpretation blocked by P0-E4/P0-E5"
     benchmarks:
-      - "same-week mean next-7d return of non-signaled tradable stocks"
+      - "same-week mean next-7d return of eligible non-signaled tradable stocks"
       - "unconditional prospective next-7d return by stock"
       - "TCSE / common-factor sensitivity where independently justified"
       - "validated external-driver residual sensitivity once EXT mapping is available"
     primary_metric: >-
       Mean across weekly cohorts of the cross-sectional next-7d return spread:
-      signaled stocks minus non-signaled stocks; inference clustered by weekly cohort.
+      eligible condition-met stocks minus eligible non-condition stocks; inference
+      clustered by weekly cohort.
     secondary_metrics:
       - median weekly cross-sectional spread
-      - mean absolute next-7d return of signaled stocks
+      - mean absolute next-7d return of condition-met stocks
       - fraction of weekly cohorts with positive spread
       - stock-level conditional lift and heterogeneity
       - sensitivity after independently selected market/external controls
@@ -72,6 +120,6 @@ hypotheses:
       to clear the economic +0.20pp threshold with a positive confidence bound means
       no promotion, even if some individual stocks look attractive.
     gating_notes:
-      - "HYP-001 may collect prospective evidence immediately."
+      - "HYP-001 may collect prospective evidence only after the reviewed collector is merged; missed anchors are never backfilled."
       - "It must not be called executable alpha before external-driver sensitivity and P0-E4/P0-E5 are complete."
-      - "Changing threshold, horizon, schedule, universe handling, or primary metric creates a new hypothesis ID."
+      - "After the first cohort exists, changing threshold, horizon, weekly anchor, capture deadline, price convention, eligibility, universe handling, or primary metric creates a new hypothesis ID."

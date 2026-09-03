@@ -1,0 +1,81 @@
+name: HYP-001 prospective evidence
+
+on:
+  schedule:
+    # Multiple same-Thursday attempts tolerate a short public-source outage.
+    # The first successful immutable cohort wins; later attempts are no-ops.
+    - cron: '15 0 * * 4'
+    - cron: '45 0 * * 4'
+    - cron: '15 1 * * 4'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hyp001-prospective-evidence
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Synchronize with latest main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout -B prospective-capture origin/main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Capture current Thursday cohort and prior outcome
+        shell: bash
+        run: |
+          set -euo pipefail
+          anchor=$(date -u +%F)
+          python research/tools/run_hyp001_prospective.py \
+            --anchor-date "$anchor" \
+            --output-root research/prospective/HYP-001 \
+            --request-delay 0.25
+      - name: Enforce prospective write allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -- research/prospective/HYP-001
+          staged=$(git diff --cached --name-status)
+          if [[ -z "$staged" ]]; then
+            echo 'No new prospective evidence; cohort was already captured.'
+            exit 0
+          fi
+          while IFS=$'\t' read -r status path; do
+            if [[ "$status" != "A" ]]; then
+              echo "::error::Prospective evidence must be append-only; staged status $status for $path"
+              exit 1
+            fi
+            if [[ ! "$path" =~ ^research/prospective/HYP-001/(cohorts|outcomes)/[0-9]{4}-[0-9]{2}-[0-9]{2}\.json$ ]]; then
+              echo "::error::Unexpected staged path: $path"
+              exit 1
+            fi
+          done <<< "$staged"
+          echo 'Staged immutable prospective evidence:'
+          echo "$staged"
+      - name: Commit prospective evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          anchor=$(date -u +%F)
+          git commit -m "research(prospective): capture HYP-001 cohort $anchor"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
