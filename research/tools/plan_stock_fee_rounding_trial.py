@@ -62,8 +62,9 @@ def parse_price(value: str) -> Decimal:
     return price
 
 
-def money(value: Decimal) -> str:
-    return format(value.quantize(Decimal("0.01")), "f")
+def exact_decimal(value: Decimal) -> str:
+    """Serialize Decimal without losing sub-cent safety-margin precision."""
+    return format(value, "f")
 
 
 def is_robust_candidate(price: Decimal, shares: int) -> TrialCandidate | None:
@@ -92,12 +93,12 @@ def is_robust_candidate(price: Decimal, shares: int) -> TrialCandidate | None:
     return TrialCandidate(
         shares=shares,
         boundary_multiplier=k,
-        boundary_gross=money(boundary),
-        displayed_gross=money(displayed_gross),
-        conservative_gross_low=money(gross_low),
-        conservative_gross_high=money(gross_high),
-        lower_margin=money(gross_low - boundary),
-        upper_margin=money(boundary + GROSS_ROUNDING_HALF_THRESHOLD - gross_high),
+        boundary_gross=exact_decimal(boundary),
+        displayed_gross=exact_decimal(displayed_gross),
+        conservative_gross_low=exact_decimal(gross_low),
+        conservative_gross_high=exact_decimal(gross_high),
+        lower_margin=exact_decimal(gross_low - boundary),
+        upper_margin=exact_decimal(boundary + GROSS_ROUNDING_HALF_THRESHOLD - gross_high),
         reference_unrounded_total_ceiling_fee=reference_fee,
         competing_rounded_gross_or_non_ceiling_fee=competing_fee,
     )
@@ -112,8 +113,8 @@ def find_candidates(
 ) -> list[TrialCandidate]:
     if max_shares < 1:
         raise PlannerError("max_shares must be positive")
-    if max_gross <= 0:
-        raise PlannerError("max_gross must be positive")
+    if not max_gross.is_finite() or max_gross <= 0:
+        raise PlannerError("max_gross must be a finite positive decimal")
     if limit < 1:
         raise PlannerError("limit must be positive")
 
@@ -126,9 +127,7 @@ def find_candidates(
         if candidate is not None:
             candidates.append(candidate)
 
-    # Lowest capital first; then prefer candidates with larger worst-side safety
-    # margin. Decimal reconstruction is exact from our formatted cents here because
-    # displayed gross is two-decimal price times integer shares.
+    # Lowest capital first; then prefer larger worst-side exact safety margin.
     candidates.sort(
         key=lambda row: (
             Decimal(row.displayed_gross),
@@ -142,12 +141,12 @@ def find_candidates(
 def build_report(price: Decimal, candidates: Sequence[TrialCandidate], *, max_gross: Decimal) -> dict:
     return {
         "research_status": "TRIAL_PLANNER_ONLY",
-        "price": format(price, "f"),
+        "price": exact_decimal(price),
         "conservative_true_price_interval": {
-            "low": format(max(Decimal("0"), price - PRICE_LOWER_DELTA), "f"),
-            "high": format(price + PRICE_UPPER_DELTA, "f"),
+            "low": exact_decimal(max(Decimal("0"), price - PRICE_LOWER_DELTA)),
+            "high": exact_decimal(price + PRICE_UPPER_DELTA),
         },
-        "max_gross": money(max_gross),
+        "max_gross": exact_decimal(max_gross),
         "candidate_count": len(candidates),
         "candidates": [asdict(candidate) for candidate in candidates],
         "interpretation": (
@@ -174,7 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             max_gross = Decimal(str(args.max_gross))
         except InvalidOperation as exc:
-            raise PlannerError("max_gross must be a positive decimal") from exc
+            raise PlannerError("max_gross must be a finite positive decimal") from exc
         candidates = find_candidates(
             price,
             max_shares=args.max_shares,
