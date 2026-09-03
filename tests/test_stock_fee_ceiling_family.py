@@ -34,7 +34,7 @@ class BroadFeeProtocolTests(unittest.TestCase):
         self.assertIsNone(broad.is_broad_candidate(price, 4))
 
     def test_near_half_fee_boundary_is_rejected(self):
-        price = broad.parse_price("374.70")
+        price = broad.parse_price("374.75")
         self.assertIsNone(broad.is_broad_candidate(price, 4))
 
     def test_broad_protocol_is_strictly_more_available_than_narrow_for_hrg_example(self):
