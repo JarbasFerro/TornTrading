@@ -34,6 +34,15 @@ ROUNDING = {
     "half_even": ROUND_HALF_EVEN,
 }
 
+# These are exact identities for non-negative gross values and therefore cannot
+# be distinguished by any sale receipt. Keep the simpler total_value expression
+# as the canonical representative rather than creating impossible uniqueness.
+EXACT_REDUNDANT_GROSS_MODELS = {
+    ("floor", "floor"),       # floor(floor(x) / 1000) == floor(x / 1000)
+    ("ceiling", "ceiling"),   # ceil(ceil(x) / 1000) == ceil(x / 1000)
+    ("floor", "half_up"),     # half-up threshold is an integer $500 boundary
+}
+
 REPORT_KEYS = {
     "research_status",
     "source",
@@ -136,7 +145,7 @@ def round_integer(value: Decimal, mode: str) -> int:
 
 
 def build_models() -> list[FeeModel]:
-    """Return the frozen candidate family in stable lexical order.
+    """Return the frozen, behaviorally non-redundant candidate family.
 
     Families:
       A) total_value: price is per-share; fee is rounded once after price*amount*0.1%.
@@ -144,9 +153,14 @@ def build_models() -> list[FeeModel]:
       C) price_is_total: defensive semantic alternative where logged price is total sale value.
       D) per_share_fee_first: fee per share is rounded before multiplying by amount.
 
-    The last two are deliberately included as falsification controls. Official Torn
-    documentation says the fee is 0.1% of total value sold, so they are not the
-    preferred interpretation absent evidence.
+    Three gross-first formulas are excluded because they are exact identities of
+    simpler total-value formulas for non-negative values. Sample-dependent
+    equivalences are *not* collapsed: if history cannot distinguish them, the
+    empirical gate remains open.
+
+    The last two families are falsification controls. Official Torn documentation
+    says the fee is 0.1% of total value sold, so they are not preferred absent
+    evidence.
     """
     models: list[FeeModel] = []
 
@@ -159,6 +173,8 @@ def build_models() -> list[FeeModel]:
 
     for gross_round in ROUNDING:
         for fee_round in ROUNDING:
+            if (gross_round, fee_round) in EXACT_REDUNDANT_GROSS_MODELS:
+                continue
             name = f"gross_{gross_round}__fee_{fee_round}"
             models.append(FeeModel(
                 name,
@@ -268,7 +284,8 @@ def analyze(observations: Sequence[SaleObservation], rejected: int, *, lookback_
         "decision_status": decision,
         "acceptance_rule": (
             f"P0-E5 may be proposed for closure only when there are at least {MIN_DISCRIMINATING_OBSERVATIONS} "
-            "discriminating observations and exactly one perfect candidate model. Otherwise the gate remains open."
+            "discriminating observations and exactly one perfect non-redundant candidate model. Sample-dependent "
+            "ties remain unresolved."
         ),
         "privacy_note": (
             "No raw logs, transaction IDs, event timestamps, stock IDs, share counts, prices, fees, profits, losses, "
@@ -304,6 +321,8 @@ def assert_safe_report(report: Mapping[str, Any]) -> None:
         raise ResearchToolError("Unexpected sell_log_type_id.")
     if report.get("api_row_cap") != MAX_LOG_ROWS:
         raise ResearchToolError("Unexpected api_row_cap.")
+    if report.get("candidate_model_count") != len(build_models()):
+        raise ResearchToolError("candidate_model_count does not match frozen family.")
     if report.get("decision_status") not in DECISION_STATES:
         raise ResearchToolError("Unexpected decision_status.")
     if not isinstance(report.get("acceptance_rule"), str) or not isinstance(report.get("privacy_note"), str):
@@ -314,6 +333,7 @@ def assert_safe_report(report: Mapping[str, Any]) -> None:
     if not isinstance(results, list) or len(results) != len(model_names):
         raise ResearchToolError("model_results must contain the entire frozen candidate family.")
     seen: set[str] = set()
+    usable = report["usable_observations"]
     for row in results:
         if not isinstance(row, Mapping) or set(row) != MODEL_RESULT_KEYS:
             raise ResearchToolError("Unsafe model result structure.")
@@ -321,8 +341,12 @@ def assert_safe_report(report: Mapping[str, Any]) -> None:
         if name not in model_names or name in seen:
             raise ResearchToolError("Unknown or duplicate model name.")
         seen.add(name)
-        if not isinstance(row.get("matches"), int) or not isinstance(row.get("mismatches"), int):
-            raise ResearchToolError("Model match counts must be integers.")
+        matches = row.get("matches")
+        mismatches = row.get("mismatches")
+        if not isinstance(matches, int) or not isinstance(mismatches, int) or matches < 0 or mismatches < 0:
+            raise ResearchToolError("Model match counts must be non-negative integers.")
+        if matches + mismatches != usable:
+            raise ResearchToolError("Model match counts do not sum to usable observations.")
         rate = row.get("match_rate")
         if rate is not None and (not isinstance(rate, (int, float)) or not 0 <= rate <= 1):
             raise ResearchToolError("Invalid model match rate.")
