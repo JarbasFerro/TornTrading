@@ -130,18 +130,29 @@ def pairwise_summary(series: Mapping[str, Mapping[int, float]]) -> dict[str, flo
             "median_pairwise_pearson": statistics.median(corrs) if corrs else None}
 
 
+def leave_two_out_pair_residual_correlation(
+    left: str,
+    right: str,
+    series: Mapping[str, Mapping[int, float]],
+    min_peers: int = MIN_PEERS,
+) -> tuple[int, float | None]:
+    """Residual correlation for one pair using a factor that excludes both members."""
+    factor = peer_factor({left, right}, series, min_peers=min_peers)
+    left_residuals, _ = residualize(series[left], factor)
+    right_residuals, _ = residualize(series[right], factor)
+    stats = regression(left_residuals, right_residuals)
+    return int(stats["count"]), stats["pearson"]
+
+
 def leave_two_out_residual_pairwise_summary(
     series: Mapping[str, Mapping[int, float]],
     min_peers: int = MIN_PEERS,
 ) -> dict[str, float | int | None]:
-    """Measure residual pair dependence without either pair member entering its factor."""
+    """Aggregate pair dependence without either pair member entering its factor."""
     symbols, corrs = sorted(series), []
     for i, left in enumerate(symbols):
         for right in symbols[i+1:]:
-            factor = peer_factor({left, right}, series, min_peers=min_peers)
-            left_residuals, _ = residualize(series[left], factor)
-            right_residuals, _ = residualize(series[right], factor)
-            corr = regression(left_residuals, right_residuals)["pearson"]
+            _, corr = leave_two_out_pair_residual_correlation(left, right, series, min_peers=min_peers)
             if corr is not None:
                 corrs.append(float(corr))
     return {"pair_count": len(corrs), "mean_pairwise_pearson": statistics.fmean(corrs) if corrs else None,
