@@ -1,0 +1,79 @@
+name: Stock log schema probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/stock-log-schema-probe.yml'
+      - 'research/tools/probe_stock_log_schema.py'
+      - 'tests/test_stock_log_schema_probe.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Probe official stock-log candidate fields
+        id: probe
+        shell: bash
+        run: |
+          set +e
+          rm -rf research/output/stock_log_schema
+          python research/tools/probe_stock_log_schema.py \
+            --api-key "$TORN_API_KEY" \
+            --output research/output/stock_log_schema/summary.json
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Enforce schema-only artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='research/output/stock_log_schema/summary.json'
+          actual=$(find research/output/stock_log_schema -type f | sort)
+          if [[ "$actual" != "$expected" ]]; then
+            echo '::error::Unexpected stock-log probe artifact file.'
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+          PYTHONPATH=research/tools python - <<'PY'
+          import json
+          from pathlib import Path
+          import probe_stock_log_schema as probe
+          path = Path('research/output/stock_log_schema/summary.json')
+          probe.assert_safe_report(json.loads(path.read_text(encoding='utf-8')))
+          PY
+      - name: Add research summary
+        shell: bash
+        run: |
+          echo '## Stock log schema probe' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Only preregistered generic candidate field names/types are emitted; private user-log values and unknown private keys are discarded.' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat research/output/stock_log_schema/summary.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload schema-only evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-log-schema-${{ github.run_id }}
+          path: research/output/stock_log_schema/summary.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Fail if user-log access was unavailable
+        if: steps.probe.outputs.exit_code != '0'
+        run: |
+          echo '::error::Official user-log candidate-field schema could not be observed with the configured key.'
+          exit 1
