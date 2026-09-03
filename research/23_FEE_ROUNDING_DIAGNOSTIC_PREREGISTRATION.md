@@ -3,7 +3,8 @@
 Status: **PREREGISTERED DIAGNOSTIC — not confirmatory**  
 Preregistration date: 2026-09-03  
 Triggering result: first confirmatory fee-rounding run `33718838875` returned `NO_PERFECT_MODEL`  
-Instrument: `research/tools/diagnose_stock_sell_fee_rounding.py`
+Calculation module: `research/tools/diagnose_stock_sell_fee_rounding.py`  
+Current-API runner: `research/tools/run_stock_sell_fee_rounding_diagnostic.py`
 
 ## 1. Why this diagnostic exists
 
@@ -41,16 +42,17 @@ Compatibility with a precision interval is not proof that Torn uses hidden preci
 
 Source remains official Torn API v2 `GET /user/log` filtered to log type **5511 — Stock sell**.
 
+Current Torn OpenAPI 6.6.1 documents the relevant `/user/log` paging inputs as `log`, `limit`, `from`, and `to`; it does **not** document a `sort` parameter for this endpoint. The final project review therefore added a current-API runner that strips any internal/legacy `sort` key before transmission and will not forward it from pagination links.
+
 Window:
 
 - end: official Torn server timestamp obtained at run start;
 - start: exactly 365 days earlier;
-- sort: descending timestamp;
 - page size: 100;
 - maximum pages: 10;
 - maximum unique usable rows: 1,000.
 
-The instrument follows only Torn-provided `_metadata.links.next` pagination.
+The instrument follows only Torn-provided `_metadata.links.next` pagination. It uses the endpoint's current fixed/default ordering as returned by Torn and independently sorts the collected event timestamps in memory for chronological quartiles.
 
 It refuses a pagination link if it:
 
@@ -59,10 +61,9 @@ It refuses a pagination link if it:
 - changes the `/user/log` endpoint;
 - changes log type away from 5511;
 - moves `from` or `to` outside the frozen one-year window;
-- requests more than 100 rows;
-- changes sort away from `DESC`.
+- requests more than 100 rows.
 
-Unknown query parameters are ignored rather than forwarded. In particular, credentials/tokens embedded in a link cannot be propagated by the diagnostic.
+Only the documented `log`, `from`, `to`, and `limit` values may reach the `/user/log` HTTP request. Unknown query parameters are ignored rather than forwarded. In particular, credentials/tokens, comments, targets, timestamps, or undocumented ordering parameters embedded in a link cannot be propagated by the diagnostic.
 
 Event IDs are used transiently only to deduplicate overlapping pagination boundaries. Event timestamps are used transiently only for chronological rank quartiles. Neither is persisted.
 
