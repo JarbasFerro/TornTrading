@@ -43,7 +43,7 @@ Existing sell logs are preferable to deliberately creating trades when they can 
 - provide repeated independent sale receipts;
 - can distinguish rounding behavior if gross values happen to fall on useful fractional boundaries.
 
-Historical evidence is not automatically sufficient. The gate remains open if the available observations do not discriminate the frozen candidate family.
+Historical evidence is not automatically sufficient. The gate remains open if the available observations do not discriminate the frozen candidate family strongly enough.
 
 ## 4. Data window and source — frozen before value-bearing execution
 
@@ -161,9 +161,12 @@ Also publish:
 - usable observation count;
 - rejected observation count;
 - number of observations on which at least two frozen candidate models predict different fees;
+- if there is exactly one perfect model, the **minimum pairwise separation**: the smallest number of observations on which that winner's prediction differs from any one competing model;
 - prediction-equivalence classes across the sample, identified only by model names;
 - perfect-model names;
 - decision status.
+
+The minimum pairwise separation prevents a superficially large global discrimination count from hiding a winner that beats its nearest competitor on only one or two trades.
 
 Do **not** publish any transaction's amount, price, fee, stock, timestamp, profit, or prediction vector.
 
@@ -171,11 +174,12 @@ Do **not** publish any transaction's amount, price, fee, stock, timestamp, profi
 
 P0-E5 may be **proposed for closure** from this historical test only if all are true:
 
-1. at least **6 observations are discriminating** across the frozen candidate family;
+1. at least **6 observations are globally discriminating** across the frozen candidate family;
 2. exactly **one non-redundant candidate model** matches every usable observation;
 3. the winning model has zero mismatches;
-4. the parser rejects no systematic subset suggesting a changed/unknown log schema;
-5. the result is reviewed in a separate post-evidence PR before becoming a `VALIDATED_FINDING`.
+4. the winner differs from **every competing model on at least 6 observations** — equivalently, its minimum pairwise separation is at least 6;
+5. the parser rejects no systematic subset suggesting a changed/unknown log schema;
+6. the result is reviewed in a separate post-evidence PR before becoming a `VALIDATED_FINDING`.
 
 Otherwise P0-E5 remains open.
 
@@ -186,9 +190,10 @@ Decision statuses:
 - `MULTIPLE_NON_EQUIVALENT_PERFECT_MODELS`
 - `NO_PERFECT_MODEL`
 - `INSUFFICIENT_DISCRIMINATION`
+- `INSUFFICIENT_WINNER_SEPARATION`
 - `NO_USABLE_OBSERVATIONS`
 
-A sample-dependent tie is not resolved merely because the tied models happen to make identical predictions on this history.
+A sample-dependent tie is not resolved merely because the tied models happen to make identical predictions on this history. Likewise, a unique perfect fit is not accepted if its nearest competitor is separated by fewer than six observations.
 
 ## 10. Privacy contract
 
