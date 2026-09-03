@@ -1,0 +1,79 @@
+name: Stock sell fee-rounding diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/stock-sell-fee-rounding-diagnostic.yml'
+      - 'research/tools/diagnose_stock_sell_fee_rounding.py'
+      - 'tests/test_stock_sell_fee_rounding_diagnostic.py'
+      - 'research/22_FEE_ROUNDING_RESULT.md'
+      - 'research/23_FEE_ROUNDING_DIAGNOSTIC_PREREGISTRATION.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Diagnose paginated official Stock sell history
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf research/output/fee_rounding_diagnostic
+          python research/tools/diagnose_stock_sell_fee_rounding.py \
+            --api-key "$TORN_API_KEY" \
+            --output research/output/fee_rounding_diagnostic/summary.json
+
+      - name: Enforce aggregate-only artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='research/output/fee_rounding_diagnostic/summary.json'
+          actual=$(find research/output/fee_rounding_diagnostic -type f | sort)
+          if [[ "$actual" != "$expected" ]]; then
+            echo '::error::Unexpected fee-rounding diagnostic artifact file.'
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+          PYTHONPATH=research/tools python - <<'PY'
+          import json
+          from pathlib import Path
+          import diagnose_stock_sell_fee_rounding as diag
+
+          path = Path('research/output/fee_rounding_diagnostic/summary.json')
+          report = json.loads(path.read_text(encoding='utf-8'))
+          diag.assert_safe_report(report)
+          PY
+
+      - name: Add aggregate diagnostic summary
+        shell: bash
+        run: |
+          echo '## Stock-sale fee-rounding post-confirmation diagnostic' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Aggregate diagnostic statistics only. This run cannot retroactively validate the failed preregistered confirmation.' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat research/output/fee_rounding_diagnostic/summary.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload aggregate diagnostic evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-sell-fee-rounding-diagnostic-${{ github.run_id }}
+          path: research/output/fee_rounding_diagnostic/summary.json
+          if-no-files-found: error
+          retention-days: 90
