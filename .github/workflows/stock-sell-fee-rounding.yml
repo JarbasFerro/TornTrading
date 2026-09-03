@@ -1,0 +1,79 @@
+name: Stock sell fee-rounding evidence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/stock-sell-fee-rounding.yml'
+      - 'research/tools/analyze_stock_sell_fee_rounding.py'
+      - 'tests/test_stock_sell_fee_rounding.py'
+      - 'research/21_FEE_ROUNDING_PREREGISTRATION.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Analyze recent official Stock sell logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf research/output/fee_rounding
+          python research/tools/analyze_stock_sell_fee_rounding.py \
+            --api-key "$TORN_API_KEY" \
+            --lookback-days 365 \
+            --output research/output/fee_rounding/summary.json
+
+      - name: Enforce aggregate-only artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='research/output/fee_rounding/summary.json'
+          actual=$(find research/output/fee_rounding -type f | sort)
+          if [[ "$actual" != "$expected" ]]; then
+            echo '::error::Unexpected fee-rounding evidence artifact file.'
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+          PYTHONPATH=research/tools python - <<'PY'
+          import json
+          from pathlib import Path
+          import analyze_stock_sell_fee_rounding as fee
+
+          path = Path('research/output/fee_rounding/summary.json')
+          report = json.loads(path.read_text(encoding='utf-8'))
+          fee.assert_safe_report(report)
+          PY
+
+      - name: Add aggregate research summary
+        shell: bash
+        run: |
+          echo '## Historical stock-sale fee-rounding evidence' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Aggregate model-fit statistics only. No individual Torn transaction values are persisted.' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat research/output/fee_rounding/summary.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload aggregate evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-sell-fee-rounding-${{ github.run_id }}
+          path: research/output/fee_rounding/summary.json
+          if-no-files-found: error
+          retention-days: 90
