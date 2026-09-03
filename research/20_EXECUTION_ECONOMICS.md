@@ -3,7 +3,7 @@
 Status: **Stage 0 / P0 execution research**  
 Research date: 2026-09-03  
 Questions advanced: MEC-003, MEC-004, MEC-006, VAL-001, VAL-002  
-Claim status: mixed `MECHANIC` / `HYPOTHESIS`; P0-E4 and P0-E5 remain open until empirical evidence is reviewed.
+Claim status: mixed `MECHANIC` / `OBSERVATION` / `HYPOTHESIS`; P0-E4 and P0-E5 remain open until empirical evidence is reviewed.
 
 ## Purpose
 
@@ -25,14 +25,25 @@ Current official Torn Stock Market documentation states:
 - buying shares has no tax;
 - selling shares charges **0.1% of the total value sold**;
 - personal statistics include stock profits, losses and fees paid;
-- the official Stock Market wiki explicitly states that the profits/losses-received statistics are not inclusive of fees paid.
+- the official Stock Market wiki states that profits/losses-received statistics are not inclusive of fees paid.
 
 Sources:
 
 - Official Stock Market wiki: `https://wiki.torn.com/wiki/Stock_Market`
-- Official API documentation / Swagger: `https://www.torn.com/api.html` and `https://www.torn.com/swagger.php`
+- Official API documentation / Swagger: `https://www.torn.com/swagger.php`
+- Official OpenAPI contract: `https://www.torn.com/swagger/openapi.json`
 
-The current API documentation also exposes `user -> log`; it is Full-access data, can be filtered by log type/category, and is documented as uncached. Public `torn -> logtypes` supplies the available log-type catalog.
+OpenAPI contract reviewed: **6.6.1 on 2026-09-03**.
+
+The reviewed API contract establishes that:
+
+- `GET /user/log` is a standalone stable v2 selection requiring a **Full** access key;
+- it accepts one or more log IDs through the `log` query parameter and up to 100 returned rows per request;
+- current `UserLogsResponse.log` is an array;
+- each current `UserLog` identifies its log type at `details.id` and exposes dynamic `data` and `params` objects;
+- public `GET /torn/logcategories` and `GET /torn/{logCategoryId}/logtypes` expose category and log-type catalogs as arrays of `{id,title}` objects.
+
+These API-shape statements are `MECHANIC`/schema-contract facts, not evidence about the contents of a specific stock-sale log.
 
 ### `HYPOTHESIS` / unresolved
 
@@ -51,16 +62,25 @@ Two read-only evidence paths exist.
 
 ### Preferred path — stock sale log
 
-If current `user -> log` stock-sale records expose fields such as shares, execution price, gross/after-fee total and fee, the log can serve as the authoritative post-trade receipt. The API call itself performs no game action.
+If current `user -> log` stock-sale records expose generic fields corresponding to shares, execution price, gross/after-fee total or fee, the log can serve as the authoritative post-trade receipt. The API call itself performs no game action.
 
-Before reading user values, TornTrading first runs `probe_stock_log_schema.py`, which persists only:
+Before reading or retaining any value-bearing user data, TornTrading runs `probe_stock_log_schema.py`. The probe is intentionally narrower than a generic schema dumper. It persists only:
 
-- public log-type IDs/names;
-- whether each type was observed historically;
-- top-level `data` field names and their primitive type classes;
-- top-level `params` field names and their primitive type classes.
+- public stock-related log-type IDs/titles obtained from Torn's public log catalogs;
+- matches against a **preregistered allowlist of generic candidate field names** needed for the execution-economics question;
+- primitive JSON type classes for those allowlisted candidate fields;
+- a UTC retrieval timestamp and whether Full user-log access was available.
 
-It deliberately discards log IDs, timestamps, titles and every field value. This establishes the minimum data surface without publishing private account information.
+It deliberately discards:
+
+- log event IDs;
+- event timestamps and rendered titles;
+- every private field value;
+- every non-preregistered private field name;
+- exact historical occurrence counts;
+- prices, fees, shares, holdings, profits, losses, account totals and transaction amounts.
+
+This is the minimum public evidence surface needed to decide whether a later value-bearing manual experiment can use stock logs directly.
 
 ### Fallback path — personal-stat deltas
 
@@ -71,20 +91,24 @@ If sale logs do not expose all required receipt values, a tightly bracketed manu
 - `stocklosses`;
 - the known purchase transaction price/shares from `user -> stocks`.
 
-No other stock transaction may occur between the before/after snapshots. Because Torn documents profits/losses separately from fees, those deltas can be used to reconstruct the sale economics, subject to validation against at least one visible in-game receipt.
+No other stock transaction may occur between the before/after snapshots. Because Torn documents profits/losses separately from fees, those deltas can potentially reconstruct the sale economics, subject to validation against at least one visible in-game receipt. This identity is a hypothesis until experimentally checked.
 
-## Stage A — privacy-safe schema probe
+## Stage A — privacy-safe candidate-field probe
 
 Instrument: `research/tools/probe_stock_log_schema.py`
 
 Acceptance requirements:
 
-1. Enumerate stock-related log types from official `torn -> logtypes`.
-2. Query those types via official `user -> log` using the configured Torn API key.
-3. Persist no user log values.
-4. Persist no raw logs, timestamps, titles, prices, fees, shares, account totals or holdings.
-5. If the configured key lacks `user -> log` access, record only that access is unavailable and fail the evidence job after uploading the safe schema report.
-6. Review the observed field names before designing the value-bearing manual experiment.
+1. Discover stock-related log categories from official `torn -> logcategories`.
+2. Enumerate their log types from official category-specific `torn -> logtypes` selections.
+3. Parse the **current v2 array response shapes** documented in OpenAPI 6.6.1.
+4. Query each public stock log type separately through official `user -> log`, using up to 100 rows for that type so a busy log type cannot crowd out another type's schema observation.
+5. Pace requests conservatively. The current implementation uses a 0.7-second inter-request delay as an operational choice; this is **not** represented as a Torn-documented per-filter limit.
+6. Persist no private user-log values.
+7. Persist no unknown private field names or exact per-type historical occurrence counts.
+8. Persist only preregistered generic candidate field names and primitive type classes.
+9. If user-log access is unavailable or the probe fails mid-run, discard partial private-log observations, record only the failed/unavailable state, upload the safe report, and fail the evidence job.
+10. Review the resulting candidate-field evidence before designing any value-bearing manual experiment.
 
 Stage A cannot resolve P0-E4/P0-E5 by itself.
 
@@ -136,7 +160,6 @@ A boundary rule requires repeated observations. One ambiguous boundary trade is 
 Let:
 
 - `n` = shares sold;
-- `b` = matched purchase price per share;
 - `C` = matched purchase cost basis under Torn's sale-removal rule;
 - `P+` = increase in `stockprofits`;
 - `P-` = increase in `stocklosses`;
@@ -144,13 +167,13 @@ Let:
 - `G` = gross sale value before fee;
 - `N` = net proceeds after fee.
 
-When a single isolated sale is fully attributable to the matched cost basis:
+Candidate fallback identity to test experimentally:
 
 `G = C + P+ - P-`
 
-and
+If that identity is validated for isolated sales, then:
 
-`execution_price = G / n`.
+`execution_price = G / n`
 
 The independently observed fee delta gives:
 
@@ -160,14 +183,14 @@ and, where the receipt/net value is available:
 
 `N = G - F`.
 
-The experiment must verify that Torn's current personal-stat semantics match these identities before using the fallback method across multiple trials.
+The experiment must verify Torn's current personal-stat semantics against visible/read-only receipt evidence before this fallback identity is adopted.
 
 ## Evidence classification
 
 The following progression is required:
 
-1. Documentation → `MECHANIC` only for the explicit 0.1% rate, no-buy-tax, minute movement and instantaneous trading claims.
-2. Schema probe → `OBSERVATION` about available read-only evidence fields only.
+1. Documentation/OpenAPI → `MECHANIC` only for explicitly documented behavior and schema shapes.
+2. Candidate-field probe → `OBSERVATION` only about which preregistered generic fields appear to be available in current read-only stock logs.
 3. Manual micro-trades → `OBSERVATION` about current execution/rounding behavior.
 4. Repeated discriminating trials with internally consistent results → candidate `VALIDATED_FINDING` for the tested Torn implementation period.
 5. Any later Torn stock-market implementation change reopens P0-E4/P0-E5.
