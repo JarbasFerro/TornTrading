@@ -15,7 +15,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
     steps:
@@ -25,7 +25,7 @@ jobs:
           python-version: '3.12'
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
-      - name: Probe official stock-log schema
+      - name: Probe official stock-log candidate fields
         id: probe
         shell: bash
         run: |
@@ -60,7 +60,7 @@ jobs:
         run: |
           echo '## Stock log schema probe' >> "$GITHUB_STEP_SUMMARY"
           echo '' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Schema field names/types only; no user log values persisted.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Only preregistered generic candidate field names/types are emitted; private user-log values and unknown private keys are discarded.' >> "$GITHUB_STEP_SUMMARY"
           echo '' >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
           cat research/output/stock_log_schema/summary.json >> "$GITHUB_STEP_SUMMARY"
@@ -75,5 +75,5 @@ jobs:
       - name: Fail if user-log access was unavailable
         if: steps.probe.outputs.exit_code != '0'
         run: |
-          echo '::error::Official user-log schema could not be observed with the configured key.'
+          echo '::error::Official user-log candidate-field schema could not be observed with the configured key.'
           exit 1
