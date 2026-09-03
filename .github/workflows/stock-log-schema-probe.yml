@@ -48,10 +48,13 @@ jobs:
             printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
             exit 1
           fi
-          if grep -Eiq '"(timestamp|title|url|api_key|payload|holdings|profits|losses|fees|price|shares)"[[:space:]]*:' "$expected"; then
-            echo '::error::Potential raw user-value field detected in schema artifact.'
-            exit 1
-          fi
+          PYTHONPATH=research/tools python - <<'PY'
+          import json
+          from pathlib import Path
+          import probe_stock_log_schema as probe
+          path = Path('research/output/stock_log_schema/summary.json')
+          probe.assert_safe_report(json.loads(path.read_text(encoding='utf-8')))
+          PY
       - name: Add research summary
         shell: bash
         run: |
