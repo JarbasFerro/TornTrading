@@ -61,7 +61,16 @@ class StockSellFeeRoundingTests(unittest.TestCase):
         self.assertIn("total_value__fee_half_up", names)
         self.assertIn("total_value__fee_half_even", names)
 
-    def test_six_discriminating_synthetic_observations_can_identify_total_value_floor(self):
+    def test_pairwise_separation_measures_nearest_competitor_not_global_activity(self):
+        vectors = {
+            "winner": (1, 1, 1, 1, 1, 1),
+            "near": (2, 1, 1, 1, 1, 1),
+            "far": (2, 2, 2, 2, 2, 2),
+        }
+        self.assertEqual(fee.discriminating_observation_count(vectors), 6)
+        self.assertEqual(fee.minimum_pairwise_separation(vectors, "winner"), 1)
+
+    def test_six_strong_synthetic_observations_identify_total_value_floor(self):
         observations = [
             fee.SaleObservation(1001, Decimal("18.981"), 18),
             fee.SaleObservation(273, Decimal("62.27"), 16),
@@ -79,6 +88,7 @@ class StockSellFeeRoundingTests(unittest.TestCase):
         self.assertEqual(report["decision_status"], "UNIQUE_PERFECT_MODEL")
         self.assertEqual(report["perfect_models"], ["total_value__fee_floor"])
         self.assertEqual(report["discriminating_observations"], 6)
+        self.assertGreaterEqual(report["winner_minimum_pairwise_separation"], 6)
 
     def test_less_than_six_discriminating_observations_cannot_close_gate(self):
         observation = fee.SaleObservation(1001, Decimal("18.981"), 18)
@@ -100,6 +110,7 @@ class StockSellFeeRoundingTests(unittest.TestCase):
         self.assertEqual(report["decision_status"], "NO_USABLE_OBSERVATIONS")
         self.assertEqual(report["usable_observations"], 0)
         self.assertEqual(report["rejected_observations"], 3)
+        self.assertIsNone(report["winner_minimum_pairwise_separation"])
 
     def test_public_report_contains_no_private_trade_values(self):
         observations = [
