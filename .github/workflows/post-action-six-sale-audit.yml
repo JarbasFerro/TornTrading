@@ -1,0 +1,78 @@
+name: Post-action six-sale audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/post-action-six-sale-audit.yml'
+      - 'research/tools/audit_post_action_six_sales.py'
+      - 'tests/test_post_action_six_sale_audit.py'
+      - 'research/27_POST_ACTION_SIX_SALE_AUDIT.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Audit latest six post-protocol Stock sell receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf research/output/post_action_six_sale_audit
+          python research/tools/audit_post_action_six_sales.py \
+            --api-key "$TORN_API_KEY" \
+            --output research/output/post_action_six_sale_audit/summary.json
+
+      - name: Enforce aggregate-only artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='research/output/post_action_six_sale_audit/summary.json'
+          actual=$(find research/output/post_action_six_sale_audit -type f | sort)
+          if [[ "$actual" != "$expected" ]]; then
+            echo '::error::Unexpected post-action audit artifact file.'
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+          PYTHONPATH=research/tools python - <<'PY'
+          import json
+          from pathlib import Path
+          import audit_post_action_six_sales as audit
+
+          path = Path('research/output/post_action_six_sale_audit/summary.json')
+          report = json.loads(path.read_text(encoding='utf-8'))
+          audit.assert_safe_report(report)
+          PY
+
+      - name: Add aggregate audit summary
+        shell: bash
+        run: |
+          echo '## Post-action six-sale audit' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Aggregate observational evidence only. The six already-completed sales lack the frozen pre-click planning record and cannot independently close P0-E5.' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat research/output/post_action_six_sale_audit/summary.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload aggregate audit evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-action-six-sale-audit-${{ github.run_id }}
+          path: research/output/post_action_six_sale_audit/summary.json
+          if-no-files-found: error
+          retention-days: 90
