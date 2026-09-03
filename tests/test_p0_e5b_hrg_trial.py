@@ -7,11 +7,11 @@ sys.path.insert(0, str(ROOT / "research" / "tools"))
 import audit_p0_e5b_hrg_trial as audit
 
 
-def sell(ts=1788465700, fee=2, price="272.67", amount=4, stock=16):
+def sell(ts=1788465740, fee=2, price="272.67", amount=4, stock=16):
     return {"timestamp": ts, "details": {"id": 5511}, "data": {"amount": amount, "price": price, "fees": fee, "profit": 0, "stock": stock}}
 
 
-def buy(ts=1788465690, stock=16):
+def buy(ts=1788465730, stock=16):
     return {"timestamp": ts, "details": {"id": 5510}, "data": {"amount": 4, "price": "272.67", "stock": stock}}
 
 
@@ -22,7 +22,7 @@ class P0E5bHrgTrialAuditTests(unittest.TestCase):
     def test_valid_receipt_supports_ceiling_family(self):
         report = audit.build_report(
             stocks=self.stocks(),
-            sells_payload={"log": [sell(ts=1788465730, fee=2)]},
+            sells_payload={"log": [sell(fee=2)]},
             buys_payload={"log": []},
             retrieved_at="2026-09-03T20:10:00Z",
         )
@@ -33,7 +33,7 @@ class P0E5bHrgTrialAuditTests(unittest.TestCase):
     def test_non_ceiling_receipt_is_classified(self):
         report = audit.build_report(
             stocks=self.stocks(),
-            sells_payload={"log": [sell(ts=1788465730, fee=1)]},
+            sells_payload={"log": [sell(fee=1)]},
             buys_payload={"log": []},
             retrieved_at="2026-09-03T20:10:00Z",
         )
@@ -43,8 +43,8 @@ class P0E5bHrgTrialAuditTests(unittest.TestCase):
     def test_same_minute_buy_invalidates_control(self):
         report = audit.build_report(
             stocks=self.stocks(),
-            sells_payload={"log": [sell(ts=1788465730, fee=2)]},
-            buys_payload={"log": [buy(ts=1788465720)]},
+            sells_payload={"log": [sell(fee=2)]},
+            buys_payload={"log": [buy()]},
             retrieved_at="2026-09-03T20:10:00Z",
         )
         self.assertEqual(report["trial_validity"], "INVALID_CONTROL_FAILURE")
@@ -53,7 +53,7 @@ class P0E5bHrgTrialAuditTests(unittest.TestCase):
     def test_wrong_price_does_not_match_planned_receipt(self):
         report = audit.build_report(
             stocks=self.stocks(),
-            sells_payload={"log": [sell(ts=1788465730, fee=2, price="272.68")]},
+            sells_payload={"log": [sell(fee=2, price="272.68")]},
             buys_payload={"log": []},
             retrieved_at="2026-09-03T20:10:00Z",
         )
