@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Describe common Torn-market structure with a leave-one-out equal-weight factor."""
+"""Describe common Torn-market structure with self-exclusion-safe equal-weight factors."""
 from __future__ import annotations
 
 import argparse, csv, json, math, statistics, sys, time
@@ -59,15 +59,23 @@ def returns_from_rows(rows: Sequence[Mapping[str, Any]], interval: str, now_ts: 
     return result
 
 
-def leave_one_out_factor(target: str, series: Mapping[str, Mapping[int, float]], min_peers: int = MIN_PEERS) -> dict[int, float]:
-    peers = [s for s in series if s != target]
-    timestamps = set().union(*(set(series[s]) for s in peers)) if peers else set()
+def peer_factor(
+    excluded: set[str],
+    series: Mapping[str, Mapping[int, float]],
+    min_peers: int = MIN_PEERS,
+) -> dict[int, float]:
+    peers = [symbol for symbol in series if symbol not in excluded]
+    timestamps = set().union(*(set(series[symbol]) for symbol in peers)) if peers else set()
     result: dict[int, float] = {}
     for ts in sorted(timestamps):
-        values = [series[s][ts] for s in peers if ts in series[s]]
+        values = [series[symbol][ts] for symbol in peers if ts in series[symbol]]
         if len(values) >= min_peers:
             result[ts] = statistics.fmean(values)
     return result
+
+
+def leave_one_out_factor(target: str, series: Mapping[str, Mapping[int, float]], min_peers: int = MIN_PEERS) -> dict[int, float]:
+    return peer_factor({target}, series, min_peers=min_peers)
 
 
 def regression(factor: Mapping[int, float], target: Mapping[int, float]) -> dict[str, float | int | None]:
@@ -122,6 +130,24 @@ def pairwise_summary(series: Mapping[str, Mapping[int, float]]) -> dict[str, flo
             "median_pairwise_pearson": statistics.median(corrs) if corrs else None}
 
 
+def leave_two_out_residual_pairwise_summary(
+    series: Mapping[str, Mapping[int, float]],
+    min_peers: int = MIN_PEERS,
+) -> dict[str, float | int | None]:
+    """Measure residual pair dependence without either pair member entering its factor."""
+    symbols, corrs = sorted(series), []
+    for i, left in enumerate(symbols):
+        for right in symbols[i+1:]:
+            factor = peer_factor({left, right}, series, min_peers=min_peers)
+            left_residuals, _ = residualize(series[left], factor)
+            right_residuals, _ = residualize(series[right], factor)
+            corr = regression(left_residuals, right_residuals)["pearson"]
+            if corr is not None:
+                corrs.append(float(corr))
+    return {"pair_count": len(corrs), "mean_pairwise_pearson": statistics.fmean(corrs) if corrs else None,
+            "median_pairwise_pearson": statistics.median(corrs) if corrs else None}
+
+
 def rounded(row: Mapping[str, Any]) -> dict[str, Any]:
     return {k: (round(v, 12) if isinstance(v, float) and math.isfinite(v) else None if isinstance(v, float) else v) for k, v in row.items()}
 
@@ -151,15 +177,15 @@ def run(args: argparse.Namespace) -> int:
             except ResearchToolError as exc:
                 errors.append({"symbol": symbol, "horizon": horizon, "message": str(exc)[:300]})
             time.sleep(args.request_delay)
-        residuals: dict[str, dict[int, float]] = {}
         for symbol in symbols:
             target = stock_returns.get(symbol, {})
             factor = leave_one_out_factor(symbol, stock_returns)
-            residuals[symbol], stats = residualize(target, factor)
+            _, stats = residualize(target, factor)
             factor_rows.append(rounded({"horizon": horizon, "torn_symbol": symbol, "factor": "leave_one_out_equal_weight", **stats}))
             quartile_rows.extend(rounded({"horizon": horizon, "torn_symbol": symbol, **row}) for row in chronological_quartiles(target, factor))
         market_rows.append(rounded({"horizon": horizon, "comparison": "raw_pairwise", **pairwise_summary(stock_returns)}))
-        market_rows.append(rounded({"horizon": horizon, "comparison": "loo_residual_pairwise", **pairwise_summary(residuals)}))
+        market_rows.append(rounded({"horizon": horizon, "comparison": "leave_two_out_residual_pairwise",
+                                    **leave_two_out_residual_pairwise_summary(stock_returns)}))
     all_rows = factor_rows + quartile_rows + market_rows
     if not aggregate_guard(all_rows):
         raise ResearchToolError("Aggregate-output guard failed.")
@@ -167,9 +193,11 @@ def run(args: argparse.Namespace) -> int:
     write_csv(output/"loo_factor_by_stock.csv", factor_rows); write_csv(output/"loo_factor_quartiles.csv", quartile_rows)
     write_csv(output/"market_structure.csv", market_rows); write_csv(output/"errors.csv", errors)
     summary = {"research_status": "DESCRIPTIVE_FACTOR_ANALYSIS_ONLY", "factor": "leave_one_out_equal_weight",
-               "tradable_stock_count": len(symbols), "minimum_peer_count": MIN_PEERS, "factor_rows": len(factor_rows),
-               "quartile_rows": len(quartile_rows), "market_structure_rows": len(market_rows), "error_count": len(errors),
-               "self_inclusion": False, "interpretation": "Common-factor structure only; no prediction or alpha validation."}
+               "pairwise_residual_factor": "leave_two_out_equal_weight", "tradable_stock_count": len(symbols),
+               "minimum_peer_count": MIN_PEERS, "factor_rows": len(factor_rows), "quartile_rows": len(quartile_rows),
+               "market_structure_rows": len(market_rows), "error_count": len(errors), "self_inclusion": False,
+               "pairwise_mutual_inclusion": False,
+               "interpretation": "Common-factor structure only; no prediction or alpha validation."}
     (output/"summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True)+"\n", encoding="utf-8")
     print(json.dumps(summary, indent=2, sort_keys=True)); return 0 if not errors else 3
 
