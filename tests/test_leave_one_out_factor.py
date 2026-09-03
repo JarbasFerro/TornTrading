@@ -1,4 +1,4 @@
-import sys, unittest
+import math, sys, unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,17 +52,16 @@ class LeaveOneOutFactorTests(unittest.TestCase):
         self.assertTrue(all(abs(x) < 1e-12 for x in residuals.values()))
         self.assertAlmostEqual(stats["residual_variance_ratio"], 0.0, places=10)
 
-    def test_leave_two_out_residual_summary_removes_shared_factor(self):
-        series = {}
-        for peer in range(33):
-            series[f"P{peer}"] = {t: (t - 25) / 1000 for t in range(60)}
-        common = {t: (t - 25) / 1000 for t in range(60)}
-        series["LEFT"] = {t: common[t] + ((t % 5) - 2) / 10000 for t in common}
-        series["RIGHT"] = {t: 1.5 * common[t] + (((t * 2) % 7) - 3) / 10000 for t in common}
-        raw = loo.pairwise_summary({"LEFT": series["LEFT"], "RIGHT": series["RIGHT"]})
-        adjusted = loo.leave_two_out_residual_pairwise_summary(series)
-        self.assertGreater(raw["mean_pairwise_pearson"], 0.9)
-        self.assertIsNotNone(adjusted["mean_pairwise_pearson"])
+    def test_leave_two_out_pair_diagnostic_removes_shared_factor(self):
+        common = {t: (t - 60) / 1000 for t in range(120)}
+        series = {f"P{i}": dict(common) for i in range(33)}
+        series["LEFT"] = {t: common[t] + 0.0004 * math.sin(t) for t in common}
+        series["RIGHT"] = {t: 1.5 * common[t] + 0.0004 * math.cos(t) for t in common}
+        raw_corr = loo.regression(series["LEFT"], series["RIGHT"])["pearson"]
+        count, adjusted_corr = loo.leave_two_out_pair_residual_correlation("LEFT", "RIGHT", series)
+        self.assertEqual(count, 120)
+        self.assertGreater(raw_corr, 0.99)
+        self.assertLess(abs(adjusted_corr), 0.1)
 
     def test_output_guard(self):
         self.assertTrue(loo.aggregate_guard([{"r2": .1, "horizon": "1h"}]))
