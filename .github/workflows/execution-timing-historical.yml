@@ -1,0 +1,66 @@
+name: Historical execution timing diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'research/26_EXECUTION_TIMING_HISTORICAL_PREREGISTRATION.md'
+      - 'research/tools/diagnose_stock_sell_execution_timing.py'
+      - 'tests/test_stock_sell_execution_timing.py'
+      - '.github/workflows/execution-timing-historical.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run focused tests
+        run: python -m unittest tests.test_stock_sell_execution_timing -v
+
+      - name: Run aggregate historical diagnostic
+        run: |
+          set -euo pipefail
+          test -n "$TORN_API_KEY"
+          rm -rf research/output/execution_timing_historical
+          python research/tools/diagnose_stock_sell_execution_timing.py \
+            --api-key "$TORN_API_KEY" \
+            --output research/output/execution_timing_historical/summary.json
+
+      - name: Enforce aggregate-only artifact
+        run: |
+          set -euo pipefail
+          expected='research/output/execution_timing_historical/summary.json'
+          actual=$(find research/output/execution_timing_historical -type f | sort)
+          if [[ "$actual" != "$expected" ]]; then
+            echo '::error::Unexpected execution-timing artifact file.'
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+          PYTHONPATH=research/tools python - <<'PY'
+          import json
+          from pathlib import Path
+          import diagnose_stock_sell_execution_timing as timing
+
+          path = Path('research/output/execution_timing_historical/summary.json')
+          report = json.loads(path.read_text(encoding='utf-8'))
+          timing.assert_safe_report(report)
+          PY
+
+      - name: Upload aggregate timing evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-timing-historical-${{ github.run_id }}
+          path: research/output/execution_timing_historical/summary.json
+          if-no-files-found: error
+          retention-days: 90
