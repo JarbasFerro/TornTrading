@@ -1,0 +1,121 @@
+name: External EOD TSB named follow-up
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'research/31_EXTERNAL_SECTOR_SCREEN_RESULTS.md'
+      - 'research/external_named_followup_v1.json'
+      - 'research/tools/run_external_named_followup.py'
+      - 'tests/test_external_named_followup.py'
+      - '.github/workflows/external-named-followup.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-eod-tsb-named-followup
+  cancel-in-progress: false
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TIINGO_TOKEN: ${{ secrets.TIINGO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Require Tiingo token
+        shell: bash
+        run: |
+          if [[ -z "${TIINGO_TOKEN:-}" ]]; then
+            echo "::error::Configure the TIINGO_TOKEN Actions secret before running this research screen."
+            exit 1
+          fi
+          echo "TIINGO_TOKEN is configured. Its value is never printed or passed on the command line."
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Run frozen TSB named-equity follow-up
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf research/output/external_named_followup_v1
+          python research/tools/run_external_named_followup.py \
+            --output research/output/external_named_followup_v1
+
+      - name: Enforce aggregate-only artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=research/output/external_named_followup_v1
+          expected=$(printf '%s\n' \
+            "$root/candidate_statistics.csv" \
+            "$root/errors.csv" \
+            "$root/external_coverage.csv" \
+            "$root/summary.json" | sort)
+          actual=$(find "$root" -type f | sort)
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Unexpected persisted file detected in named-follow-up output."
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+          python - <<'PY'
+          import csv, json
+          from pathlib import Path
+
+          root = Path("research/output/external_named_followup_v1")
+          expected_headers = {
+              "candidate_statistics.csv": [
+                  "torn_symbol", "external_symbol", "candidate_role", "price_variant", "external_date_offset_days",
+                  "overlap_count", "overlap_start", "overlap_end", "pearson", "spearman", "alpha", "beta", "r2",
+                  "primary_control", "control_r2", "candidate_plus_control_r2", "incremental_r2_over_control",
+                  "eligible_years", "median_yearly_pearson", "min_yearly_pearson", "max_yearly_pearson", "years_positive", "years_negative",
+              ],
+              "external_coverage.csv": ["external_symbol", "status", "return_observation_count", "first_return_date", "last_return_date"],
+              "errors.csv": ["external_symbol", "error_class", "message"],
+          }
+          for filename, expected in expected_headers.items():
+              with (root / filename).open(newline="", encoding="utf-8") as handle:
+                  header = next(csv.reader(handle))
+              if header != expected:
+                  raise SystemExit(f"Unexpected aggregate CSV schema for {filename}: {header}")
+
+          summary = json.loads((root / "summary.json").read_text(encoding="utf-8"))
+          if summary.get("raw_external_data_persisted") is not False:
+              raise SystemExit("summary does not certify raw_external_data_persisted=false")
+          requested = set(summary.get("external_symbols_requested", []))
+          expected_symbols = {"SPY", "ACWI", "QQQ", "IWM", "XLF", "KBE", "HSBC", "JPM", "BAC", "C"}
+          if requested != expected_symbols:
+              raise SystemExit(f"unexpected named-follow-up request set: {sorted(requested)}")
+          PY
+
+      - name: Add research summary
+        shell: bash
+        run: |
+          echo '## External EOD TSB named follow-up' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Frozen follow-up: TSB sector context + four preregistered named bank candidates + four broad controls.' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat research/output/external_named_followup_v1/summary.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload aggregate named-follow-up results
+        uses: actions/upload-artifact@v4
+        with:
+          name: external-eod-tsb-named-followup-${{ github.run_id }}
+          path: |
+            research/output/external_named_followup_v1/candidate_statistics.csv
+            research/output/external_named_followup_v1/errors.csv
+            research/output/external_named_followup_v1/external_coverage.csv
+            research/output/external_named_followup_v1/summary.json
+          if-no-files-found: error
+          retention-days: 90
