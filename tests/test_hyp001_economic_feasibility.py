@@ -33,7 +33,9 @@ class Hyp001EconomicFeasibilityTests(unittest.TestCase):
             {"anchor": "2026-01-08", "condition_met": False, "gross_return": 0.20},
         ]
         spreads = econ.weekly_spreads(rows, "gross_return")
-        self.assertEqual(spreads, [0.10, -0.20])
+        self.assertEqual(len(spreads), 2)
+        self.assertAlmostEqual(spreads[0], 0.10)
+        self.assertAlmostEqual(spreads[1], -0.20)
         self.assertAlmostEqual(sum(spreads) / len(spreads), -0.05)
 
     def test_cutoff_prevents_post_september_3_outcomes(self):
