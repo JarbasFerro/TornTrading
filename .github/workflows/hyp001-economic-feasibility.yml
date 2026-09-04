@@ -1,0 +1,68 @@
+name: HYP-001 economic feasibility
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'research/32_HYP001_ECONOMIC_FEASIBILITY_PREREGISTRATION.md'
+      - 'research/32A_HYP001_FEASIBILITY_STATISTIC_CLARIFICATION.md'
+      - 'research/tools/run_hyp001_economic_feasibility.py'
+      - 'tests/test_hyp001_economic_feasibility.py'
+      - '.github/workflows/hyp001-economic-feasibility.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run full research tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Run discovery-sample economic feasibility audit
+        run: |
+          set -euo pipefail
+          rm -rf research/output/hyp001_economic_feasibility
+          python research/tools/run_hyp001_economic_feasibility.py \
+            --output research/output/hyp001_economic_feasibility/summary.json \
+            --annual-output research/output/hyp001_economic_feasibility/annual.csv
+
+      - name: Enforce aggregate-only evidence files
+        run: |
+          set -euo pipefail
+          expected=$'research/output/hyp001_economic_feasibility/annual.csv\nresearch/output/hyp001_economic_feasibility/summary.json'
+          actual=$(find research/output/hyp001_economic_feasibility -type f | sort)
+          if [[ "$actual" != "$expected" ]]; then
+            echo '::error::Unexpected HYP-001 feasibility artifact files.'
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+          PYTHONPATH=research/tools python - <<'PY'
+          import json
+          from pathlib import Path
+          import run_hyp001_economic_feasibility as econ
+
+          p = Path('research/output/hyp001_economic_feasibility/summary.json')
+          report = json.loads(p.read_text(encoding='utf-8'))
+          econ.assert_safe_summary(report)
+          assert report['research_status'] == 'DISCOVERY_SAMPLE_ECONOMIC_FEASIBILITY_NOT_CONFIRMATORY'
+          assert report['discovery_outcome_cutoff_utc'] == '2026-09-03T00:00:00Z'
+          PY
+
+      - name: Upload aggregate feasibility evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyp001-economic-feasibility-${{ github.run_id }}
+          path: |
+            research/output/hyp001_economic_feasibility/summary.json
+            research/output/hyp001_economic_feasibility/annual.csv
+          if-no-files-found: error
+          retention-days: 90
