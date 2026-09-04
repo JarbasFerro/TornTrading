@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "research_status": "PREREGISTERED_NAMED_FOLLOWUP",
+  "as_of": "2026-09-04",
+  "source_sector_workflow_run_id": 33839002109,
+  "source_sector_artifact_digest": "sha256:d529821406b15cac37c223e62f27f19801c4c1558e9ad21a9cb9110d64c08745",
+  "promotion_policy": "Post-sector-review candidate reduction only; no mapping is validated.",
+  "promoted_stocks": [
+    {
+      "torn_symbol": "TSB",
+      "retained_sector_or_industry_proxies": [
+        "XLF",
+        "KBE"
+      ],
+      "named_equity_candidates": [
+        "HSBC",
+        "JPM",
+        "BAC",
+        "C"
+      ],
+      "decision": "PROMOTE_NAMED_EQUITY_V1"
+    }
+  ],
+  "shared_controls": [
+    "SPY",
+    "ACWI",
+    "QQQ",
+    "IWM"
+  ],
+  "rules": [
+    "Only candidates already present in external_driver_candidates.json before the sector evidence may be used.",
+    "No non-promoted Torn stock may retain sector or named-equity candidates in this follow-up.",
+    "Raw and adjusted prices and date offsets -1, 0, +1 remain unchanged from the existing EOD screen.",
+    "The follow-up is descriptive candidate reduction only and cannot validate causal mapping or executable alpha."
+  ]
+}
